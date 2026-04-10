@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import argparse
 import csv
 import math
 import random
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import matplotlib
@@ -13,9 +14,22 @@ import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.model_selection import KFold
 from torch.optim import Adam
-from torch.utils.data import DataLoader, Subset
-from torchmetrics.image import StructuralSimilarityIndexMeasure
+from torch.utils.data import DataLoader, Dataset, Subset
+try:
+    from torchmetrics.image import StructuralSimilarityIndexMeasure
+except ModuleNotFoundError:
+    StructuralSimilarityIndexMeasure = None
 from torchvision import datasets, transforms
+
+from diffusion.model import DiffusionUNet
+from diffusion.scheduler import get_noise_schedule
+from diffusion.training import (
+    train_diffusion_epoch,
+    eval_diffusion_epoch,
+    evaluate_diffusion_metrics,
+    _compute_batch_ssim,
+)
+from diffusion.sampling import sample_images
 
 # Configure matplotlib for headless environments
 matplotlib.use("Agg")
@@ -33,24 +47,28 @@ class ExperimentConfig:
     """
     data_dir: Path = Path("./data")          # Directory to download/load dataset
     output_dir: Path = Path("./outputs")     # Directory to save all artifacts and results
-    batch_size: int = 128                    # Number of samples per batch
-    epochs: int = 10                         # Number of epochs to train
+    batch_size: int = 8                      # Number of samples per batch
+    epochs: int = 1                          # Number of epochs to train
     learning_rate: float = 1e-3              # Learning rate for the optimizer
-    n_splits: int = 5                        # K-Fold Cross Validation splits
+    n_splits: int = 2                        # K-Fold Cross Validation splits
     random_seed: int = 42                    # Seed for reproducibility
-    latent_dims: tuple[int, ...] = (2, 8, 16, 32, 64)  # Different latent dimensions to evaluate
+    latent_dims: tuple[int, ...] = (8,)      # Different latent dimensions to evaluate
     num_workers: int = 0                     # Number of workers for DataLoader
+    diffusion_timesteps: int = 10            # Number of timesteps for diffusion models
+    diffusion_log_interval: int = 250        # Batch interval for diffusion progress logs
+    diffusion_val_fraction: float = 0.1      # Deprecated: diffusion now uses the standard train/test split
 
 CONFIG = ExperimentConfig()
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE = device
 CRITERION = nn.MSELoss()                     # Standard loss for AE and DAE
 
 # Cache datasets in memory to avoid multiple loading operations
-DATASET_CACHE: dict[str, datasets.VisionDataset] = {}
+DATASET_CACHE: dict[tuple[str, bool], datasets.VisionDataset] = {}
 
 # Constants for running experiments
 RUN_DATASETS = ["mnist"]                     # Add more datasets if needed
-RUN_MODELS = ["ae", "dae", "vae"]            # Extensible: add "diffusion" here in the future
+RUN_MODELS = ["ae", "dae", "vae", "diffusion"]
 DAE_NOISE_LEVEL = 0.2                        # Default noise standard deviation for DAE
 
 
@@ -171,7 +189,144 @@ def is_vae_model(model_type: str) -> bool:
     """Explicitly check if the model type corresponds to a VAE."""
     return model_type == "vae"
 
-def get_dataset(dataset_name: str = "mnist") -> datasets.VisionDataset:
+def is_diffusion(model_type: str) -> bool:
+    """Check if model type is diffusion."""
+    return model_type == "diffusion"
+
+
+def ensure_diffusion_output_dirs(output_root: Path) -> dict[str, Path]:
+    """Create and return the standard diffusion artifact directories."""
+    diffusion_root = output_root / "diffusion"
+    paths = {
+        "root": diffusion_root,
+        "loss_curves": diffusion_root / "loss_curves",
+        "samples": diffusion_root / "samples",
+        "snapshots": diffusion_root / "snapshots",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def format_experiment_name(
+    config: dict[str, str | int],
+    artifact: str,
+    *,
+    include_epochs: bool = False,
+) -> str:
+    """Build consistent diffusion artifact filenames."""
+    parts = [
+        str(config["dataset"]).lower(),
+        artifact,
+        f"bc{config['base_channels']}",
+        f"t{config['timesteps']}",
+    ]
+    if include_epochs:
+        parts.append(f"e{config['epochs']}")
+    return "_".join(parts)
+
+
+def build_diffusion_artifact_config(dataset_name: str, base_channels: int) -> dict[str, str | int]:
+    """Centralize diffusion naming inputs so plots and logs stay aligned."""
+    return {
+        "dataset": dataset_name,
+        "base_channels": base_channels,
+        "timesteps": CONFIG.diffusion_timesteps,
+        "epochs": CONFIG.epochs,
+    }
+
+
+def print_diffusion_experiment_header(dataset_name: str, base_channels: int) -> None:
+    """Emit a clean experiment banner for diffusion runs."""
+    print("-" * 40)
+    print("Running Diffusion Model")
+    print(f"Dataset: {dataset_name.upper()}")
+    print(f"Base Channels: {base_channels}")
+    print(f"Timesteps: {CONFIG.diffusion_timesteps}")
+    print(f"Epochs: {CONFIG.epochs}")
+    print("-" * 40)
+
+
+def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> torch.Tensor:
+    """Normalize tensors for report-friendly visualization without touching model behavior."""
+    display_images = images.detach().cpu().float()
+    if rescale:
+        flat = display_images.reshape(display_images.shape[0], -1)
+        mins = flat.min(dim=1).values.view(-1, 1, 1, 1)
+        maxs = flat.max(dim=1).values.view(-1, 1, 1, 1)
+        display_images = (display_images - mins) / (maxs - mins).clamp_min(1e-8)
+    return display_images.clamp(0.0, 1.0)
+
+
+def parse_args() -> argparse.Namespace:
+    """Parse command-line overrides for the default experiment sweep."""
+    parser = argparse.ArgumentParser(description="Train image reconstruction models.")
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=RUN_MODELS,
+        default=RUN_MODELS,
+        help="Subset of models to train. Defaults to the full configured sweep.",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=RUN_DATASETS,
+        default=RUN_DATASETS,
+        help="Subset of datasets to train on. Defaults to the full configured sweep.",
+    )
+    parser.add_argument(
+        "--epochs",
+        type=int,
+        help="Override the number of training epochs.",
+    )
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        help="Override the DataLoader batch size.",
+    )
+    parser.add_argument(
+        "--n-splits",
+        type=int,
+        help="Override the number of K-Fold splits. Must be at least 2.",
+    )
+    parser.add_argument(
+        "--base-channels",
+        nargs="+",
+        type=int,
+        dest="base_channels",
+        help="Override diffusion UNet base channel widths.",
+    )
+    parser.add_argument(
+        "--latent-dims",
+        nargs="+",
+        type=int,
+        dest="base_channels",
+        help="Deprecated alias for --base-channels. Values are mapped internally to diffusion base channels.",
+    )
+    parser.add_argument(
+        "--diffusion-timesteps",
+        type=int,
+        help="Override the number of diffusion timesteps used for training and sampling.",
+    )
+    parser.add_argument(
+        "--diffusion-log-interval",
+        type=int,
+        help="Override the batch interval for diffusion progress logging.",
+    )
+    parser.add_argument(
+        "--diffusion-val-fraction",
+        type=float,
+        help="Override the holdout validation fraction used for diffusion.",
+    )
+    args = parser.parse_args()
+    if args.n_splits is not None and args.n_splits < 2:
+        parser.error("--n-splits must be at least 2")
+    if args.diffusion_val_fraction is not None and not 0.0 < args.diffusion_val_fraction < 1.0:
+        parser.error("--diffusion-val-fraction must be between 0 and 1")
+    return args
+
+def get_dataset(dataset_name: str = "mnist", train: bool = True) -> datasets.VisionDataset:
     """
     Fetches the requested dataset, leveraging caching to avoid redundant downloads/loading.
     """
@@ -184,24 +339,38 @@ def get_dataset(dataset_name: str = "mnist") -> datasets.VisionDataset:
     if dataset_key not in dataset_classes:
         raise ValueError(f"Unsupported dataset_name: {dataset_name}")
 
-    if dataset_key not in DATASET_CACHE:
-        DATASET_CACHE[dataset_key] = dataset_classes[dataset_key](
+    cache_key = (dataset_key, train)
+    if cache_key not in DATASET_CACHE:
+        DATASET_CACHE[cache_key] = dataset_classes[dataset_key](
             root=CONFIG.data_dir,
-            train=True,
+            train=train,
             download=True,
             transform=transforms.ToTensor(),
         )
-    return DATASET_CACHE[dataset_key]
+    return DATASET_CACHE[cache_key]
 
-def create_loader(subset: Subset, shuffle: bool) -> DataLoader:
+def create_loader(dataset: Dataset, shuffle: bool) -> DataLoader:
     """Centralized dataloader configuration."""
     return DataLoader(
-        subset,
+        dataset,
         batch_size=CONFIG.batch_size,
         shuffle=shuffle,
         num_workers=CONFIG.num_workers,
         pin_memory=torch.cuda.is_available(),
     )
+
+
+def build_experiment_splits(dataset_size: int, model_type: str) -> list[tuple[int, np.ndarray, np.ndarray]]:
+    """Return CV folds for reconstruction models."""
+    splitter = KFold(
+        n_splits=CONFIG.n_splits,
+        shuffle=True,
+        random_state=CONFIG.random_seed,
+    )
+    return [
+        (fold_idx, train_indices, val_indices)
+        for fold_idx, (train_indices, val_indices) in enumerate(splitter.split(range(dataset_size)), start=1)
+    ]
 
 def compute_psnr(mse: float) -> float:
     """
@@ -210,6 +379,42 @@ def compute_psnr(mse: float) -> float:
     """
     mse = max(mse, 1e-12)
     return 10.0 * math.log10(1.0 / mse)
+
+
+def is_finite_metric(value: float) -> bool:
+    """Guard plotting/reporting paths that should skip undefined metrics."""
+    return math.isfinite(value)
+
+
+def format_metric(value: float, precision: int = 4) -> str:
+    """Render undefined metrics as N/A so diffusion reporting stays explicit."""
+    if not is_finite_metric(value):
+        return "N/A"
+    return f"{value:.{precision}f}"
+
+
+def format_capacity_label(model_type: str, capacity: int) -> str:
+    """Render model capacity using the right term for each architecture."""
+    if is_diffusion(model_type):
+        return f"Base Channels={capacity}"
+    return f"Latent={capacity}"
+
+
+def build_diffusion_metrics(noise_prediction_mse: float) -> dict[str, float]:
+    """Diffusion validation tracks noise-prediction MSE, not image reconstruction metrics."""
+    return {
+        "mse": noise_prediction_mse,
+        "psnr": float("nan"),
+        "ssim": float("nan"),
+    }
+
+
+def mean_metric(values: list[float]) -> float:
+    """Average only defined values so diffusion can skip unsupported metrics cleanly."""
+    finite_values = [value for value in values if is_finite_metric(value)]
+    if not finite_values:
+        return float("nan")
+    return float(np.mean(finite_values))
 
 
 def inject_noise(clean_images: torch.Tensor, noise_level: float) -> torch.Tensor:
@@ -364,7 +569,9 @@ def evaluate_metrics(
     ssim_total = 0.0
     num_batches = 0
     # Structural Similarity Index Measure: compares image structural differences
-    ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
+    ssim_metric = None
+    if StructuralSimilarityIndexMeasure is not None:
+        ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
 
     with torch.no_grad():
         for clean_images, _ in loader:
@@ -378,8 +585,11 @@ def evaluate_metrics(
                 raise NotImplementedError(f"Metrics not supported for {model_type}")
                 
             mse_total += criterion(reconstructed_images, clean_images).item()
-            ssim_total += ssim_metric(reconstructed_images, clean_images).item()
-            ssim_metric.reset()
+            if ssim_metric is not None:
+                ssim_total += ssim_metric(reconstructed_images, clean_images).item()
+                ssim_metric.reset()
+            else:
+                ssim_total += _compute_batch_ssim(reconstructed_images, clean_images)
             num_batches += 1
 
     mse = mse_total / num_batches
@@ -404,7 +614,8 @@ def show_reconstructions(
     """Visualize original vs (optionally noisy) vs reconstructed images."""
     model.eval()
     clean_images, _ = next(iter(loader))
-    clean_images = clean_images[:10].to(device)
+    num_images = min(10, clean_images.shape[0])
+    clean_images = clean_images[:num_images].to(device)
 
     inputs = clean_images
     if is_denoising(model_type):
@@ -422,8 +633,8 @@ def show_reconstructions(
 
     if is_denoising(model_type):
         noisy_images = noisy_images.cpu()
-        figure, axes = plt.subplots(3, 10, figsize=(15, 4))
-        for i in range(10):
+        figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4), squeeze=False)
+        for i in range(num_images):
             axes[0, i].imshow(clean_images[i].squeeze(), cmap="gray")
             axes[1, i].imshow(noisy_images[i].squeeze(), cmap="gray")
             axes[2, i].imshow(reconstructed_images[i].squeeze(), cmap="gray")
@@ -433,8 +644,8 @@ def show_reconstructions(
         axes[1, 0].set_title("Noisy")
         axes[2, 0].set_title("Reconstructed")
     else:
-        figure, axes = plt.subplots(2, 10, figsize=(15, 3))
-        for i in range(10):
+        figure, axes = plt.subplots(2, num_images, figsize=(1.5 * num_images, 3), squeeze=False)
+        for i in range(num_images):
             axes[0, i].imshow(clean_images[i].squeeze(), cmap="gray")
             axes[1, i].imshow(reconstructed_images[i].squeeze(), cmap="gray")
             axes[0, i].axis("off")
@@ -459,6 +670,33 @@ def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
     figure.tight_layout()
     figure.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
+
+
+def plot_image_grid(
+    images: torch.Tensor,
+    save_path: Path,
+    title: str,
+    num_cols: int = 5,
+) -> None:
+    """Save a compact grid of generated images for unconditional samplers."""
+    images = prepare_display_images(images)
+    num_images = images.shape[0]
+    num_cols = max(1, min(num_cols, num_images))
+    num_rows = math.ceil(num_images / num_cols)
+    figure, axes = plt.subplots(num_rows, num_cols, figsize=(1.8 * num_cols, 1.8 * num_rows))
+    axes_array = np.atleast_1d(axes).reshape(num_rows, num_cols)
+
+    for image_idx in range(num_rows * num_cols):
+        axis = axes_array.flat[image_idx]
+        axis.axis("off")
+        if image_idx < num_images:
+            axis.imshow(images[image_idx].squeeze(), cmap="gray")
+
+    figure.suptitle(title)
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
 
 def generate_samples(
     model: nn.Module,
@@ -513,6 +751,60 @@ def interpolate_images(
     plot_image_row(interpolated, save_path, title="VAE Latent Interpolation")
 
 
+def plot_diffusion_snapshots(
+    model: nn.Module,
+    scheduler: object,
+    device: torch.device,
+    dataset_name: str,
+    base_channels: int,
+    save_path: Path,
+    num_samples: int = 8,
+    num_snapshots: int = 9,
+) -> None:
+    """Generates a progression visual of the diffusion reverse process."""
+    _, intermediate_images, intermediate_steps = sample_images(
+        model,
+        scheduler,
+        device,
+        num_samples=num_samples,
+        return_intermediate=True,
+        num_snapshots=num_snapshots,
+    )
+
+    num_snapshots = len(intermediate_images)
+    figure, axes = plt.subplots(
+        num_snapshots,
+        num_samples,
+        figsize=(1.55 * num_samples, 1.55 * num_snapshots),
+        squeeze=False,
+    )
+
+    for row_idx, (images, step_num) in enumerate(zip(intermediate_images, intermediate_steps)):
+        display_images = prepare_display_images(images, rescale=True)
+        for col_idx in range(num_samples):
+            ax = axes[row_idx, col_idx]
+            ax.imshow(display_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
+            ax.axis("off")
+            if col_idx == 0:
+                ax.set_ylabel(
+                    f"t={step_num}",
+                    rotation=0,
+                    labelpad=24,
+                    va="center",
+                    fontsize=9,
+                    fontweight="bold",
+                )
+
+    figure.suptitle(
+        f"Reverse Diffusion Process (Noise -> Image)\n"
+        f"{dataset_name.upper()} | Base Channels = {base_channels}",
+        fontsize=13,
+    )
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
+
 def plot_latent_space(
     model: nn.Module,
     loader: DataLoader,
@@ -556,17 +848,19 @@ def plot_latent_space(
 def plot_loss_curves(
     train_losses: list[float],
     val_losses: list[float],
-    latent_dim: int,
     save_path: Path,
+    title: str | None = None,
+    y_label: str = "Loss",
 ) -> None:
     """Plots training vs validation loss curves across epochs."""
     epochs = np.arange(1, len(train_losses) + 1)
     figure, axis = plt.subplots(figsize=(8, 5))
-    axis.plot(epochs, train_losses, marker="o", label="Train Loss")
-    axis.plot(epochs, val_losses, marker="s", label="Validation Loss")
-    axis.set_title(f"Loss Curves (latent_dim={latent_dim})")
+    axis.plot(epochs, train_losses, marker="o", linewidth=2.0, markersize=5, label="Train Loss")
+    axis.plot(epochs, val_losses, marker="s", linewidth=2.0, markersize=5, label="Validation Loss")
+    if title is not None:
+        axis.set_title(title)
     axis.set_xlabel("Epoch")
-    axis.set_ylabel("Loss")
+    axis.set_ylabel(y_label)
     axis.legend()
     axis.grid(True, alpha=0.3)
     figure.tight_layout()
@@ -601,30 +895,38 @@ def plot_results(results_dict: dict[int, dict[str, float]], save_path: Path) -> 
 def plot_model_metric_comparison(
     rows: list[dict[str, float | int | str]],
     dataset_name: str,
-    latent_dim: int,
+    capacity: int,
     save_path: Path,
 ) -> None:
     """Compares different models on key metrics (MSE, PSNR, SSIM) for a single latent dimension."""
-    model_labels = [str(row["model_type"]).upper() for row in rows]
-    mse_values = [float(row["mean_loss"]) for row in rows]
-    psnr_values = [float(row["psnr"]) for row in rows]
-    ssim_values = [float(row["ssim"]) for row in rows]
-    x = np.arange(len(rows))
-
     figure, axes = plt.subplots(1, 3, figsize=(13, 4))
     metric_specs = [
-        ("Mean MSE", mse_values, "tab:red"),
-        ("PSNR", psnr_values, "tab:blue"),
-        ("SSIM", ssim_values, "tab:green"),
+        ("Mean MSE", "mean_loss", "tab:red"),
+        ("PSNR", "psnr", "tab:blue"),
+        ("SSIM", "ssim", "tab:green"),
     ]
 
-    for axis, (title, values, color) in zip(axes, metric_specs):
+    for axis, (title, metric_key, color) in zip(axes, metric_specs):
+        metric_rows = [
+            row for row in rows
+            if is_finite_metric(float(row[metric_key]))
+        ]
+        if not metric_rows:
+            axis.set_title(title)
+            axis.text(0.5, 0.5, "N/A", ha="center", va="center", fontsize=12)
+            axis.set_xticks([])
+            axis.set_yticks([])
+            continue
+
+        model_labels = [str(row["model_type"]).upper() for row in metric_rows]
+        values = [float(row[metric_key]) for row in metric_rows]
+        x = np.arange(len(metric_rows))
         axis.bar(x, values, color=color, alpha=0.85)
         axis.set_title(title)
         axis.set_xticks(x, model_labels)
         axis.grid(True, axis="y", alpha=0.25)
 
-    figure.suptitle(f"{dataset_name.upper()} Model Comparison (latent_dim={latent_dim})")
+    figure.suptitle(f"{dataset_name.upper()} Model Comparison (Capacity = {capacity})")
     figure.tight_layout()
     figure.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
@@ -645,19 +947,28 @@ def plot_metrics_vs_latent_by_model(
         "ae": ("AE", "tab:blue"),
         "dae": ("DAE", "tab:orange"),
         "vae": ("VAE", "tab:green"),
+        "diffusion": ("Diffusion", "tab:purple"),
     }
 
     figure, axes = plt.subplots(1, 3, figsize=(15, 4.5))
 
     for axis, (metric_key, metric_label) in zip(axes, metrics):
+        metric_has_values = False
         for model_key, (model_label, color) in model_styles.items():
             model_rows = [row for row in rows if str(row["model_type"]) == model_key]
             model_rows.sort(key=lambda row: int(row["latent_dim"]))
             if not model_rows:
                 continue
 
-            latent_dims = [int(row["latent_dim"]) for row in model_rows]
-            metric_values = [float(row[metric_key]) for row in model_rows]
+            filtered_rows = [
+                row for row in model_rows
+                if is_finite_metric(float(row[metric_key]))
+            ]
+            if not filtered_rows:
+                continue
+
+            latent_dims = [int(row["latent_dim"]) for row in filtered_rows]
+            metric_values = [float(row[metric_key]) for row in filtered_rows]
             axis.plot(
                 latent_dims,
                 metric_values,
@@ -666,15 +977,18 @@ def plot_metrics_vs_latent_by_model(
                 label=model_label,
                 color=color,
             )
+            metric_has_values = True
 
-        axis.set_title(f"{metric_label} vs Latent Dim")
-        axis.set_xlabel("Latent Dimension")
+        axis.set_title(f"{metric_label} vs Model Capacity")
+        axis.set_xlabel("Model Capacity")
         axis.set_ylabel(metric_label)
         axis.set_xticks(sorted({int(row["latent_dim"]) for row in rows}))
         axis.grid(True, alpha=0.3)
+        if not metric_has_values:
+            axis.text(0.5, 0.5, "N/A", ha="center", va="center", transform=axis.transAxes, fontsize=12)
 
     axes[0].legend()
-    figure.suptitle(f"{dataset_name.upper()} Metrics by Model and Latent Dimension")
+    figure.suptitle(f"{dataset_name.upper()} Metrics by Model Capacity")
     figure.tight_layout()
     figure.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
@@ -723,98 +1037,165 @@ def run_kfold_experiment(
     Runs a full K-Fold cross validation for a specific configuration.
     Returns metrics and best fold's parameters.
     """
-    dataset = get_dataset(dataset_name=dataset_name)
-    
     noise_text = f" | noise={noise_level:g}" if is_denoising(model_type) else ""
     log_prefix = f"[{dataset_name.upper()} | {model_type.upper()}{noise_text}]"
-    
-    splitter = KFold(
-        n_splits=CONFIG.n_splits,
-        shuffle=True,
-        random_state=CONFIG.random_seed,
-    )
+    capacity_label = format_capacity_label(model_type, latent_dim)
+    split_label = "Split" if is_diffusion(model_type) else "Fold"
 
     fold_metrics: list[dict[str, float]] = []
     best_fold_payload: dict[str, object] | None = None
 
-    for fold_idx, (train_indices, val_indices) in enumerate(splitter.split(range(len(dataset))), start=1):
-        train_subset = Subset(dataset, train_indices.tolist())
-        val_subset = Subset(dataset, val_indices.tolist())
+    if is_diffusion(model_type):
+        train_dataset = get_dataset(dataset_name=dataset_name, train=True)
+        test_dataset = get_dataset(dataset_name=dataset_name, train=False)
+        train_loader = create_loader(train_dataset, shuffle=True)
+        eval_loader = create_loader(test_dataset, shuffle=False)
+        experiment_splits = [(1, train_loader, eval_loader)]
 
-        train_loader = create_loader(train_subset, shuffle=True)
-        val_loader = create_loader(val_subset, shuffle=False)
+        print(f"{log_prefix} {capacity_label} | Train dataset size: {len(train_dataset)}")
+        print(f"{log_prefix} {capacity_label} | Test dataset size: {len(test_dataset)}")
+        print(f"{log_prefix} {capacity_label} | Train batches: {len(train_loader)}")
+        print(f"{log_prefix} {capacity_label} | Test batches: {len(eval_loader)}")
+    else:
+        dataset = get_dataset(dataset_name=dataset_name, train=True)
+        experiment_splits = []
+        for fold_idx, train_indices, val_indices in build_experiment_splits(len(dataset), model_type):
+            train_subset = Subset(dataset, train_indices.tolist())
+            val_subset = Subset(dataset, val_indices.tolist())
+            train_loader = create_loader(train_subset, shuffle=True)
+            eval_loader = create_loader(val_subset, shuffle=False)
+            experiment_splits.append((fold_idx, train_loader, eval_loader, train_indices, val_indices))
+
+    for split_entry in experiment_splits:
+        if is_diffusion(model_type):
+            fold_idx, train_loader, eval_loader = split_entry
+            val_indices = np.arange(len(eval_loader.dataset))
+        else:
+            fold_idx, train_loader, eval_loader, _, val_indices = split_entry
 
         # Extensible instantiator
+        scheduler = None
         if is_vae_model(model_type):
             model_class = VariationalAutoencoder
+            model = model_class(latent_dim=latent_dim).to(DEVICE)
         elif model_type in ("ae", "dae"):
             model_class = FullyConnectedAutoencoder
+            model = model_class(latent_dim=latent_dim).to(DEVICE)
+        elif model_type == "diffusion":
+            # Diffusion reuses the experiment loop, but the model predicts added noise
+            # rather than reconstructing the input image directly.
+            model = DiffusionUNet(base_channels=latent_dim).to(DEVICE)
+            scheduler = get_noise_schedule(CONFIG.diffusion_timesteps, DEVICE)
         else:
             raise NotImplementedError(f"Model initialization for {model_type} not implemented")
             
-        model = model_class(latent_dim=latent_dim).to(DEVICE)
         optimizer = Adam(model.parameters(), lr=CONFIG.learning_rate)
 
         train_losses: list[float] = []
         val_losses: list[float] = []
 
         for epoch in range(1, CONFIG.epochs + 1):
-            train_loss = train_epoch(
-                model,
-                train_loader,
-                optimizer,
-                CRITERION,
-                DEVICE,
-                model_type=model_type,
-                noise_level=noise_level,
-            )
-            val_loss = eval_epoch(
-                model,
-                val_loader,
-                CRITERION,
-                DEVICE,
-                model_type=model_type,
-                noise_level=noise_level,
-            )
+            if is_diffusion(model_type):
+                train_loss = train_diffusion_epoch(
+                    model,
+                    train_loader,
+                    optimizer,
+                    scheduler,
+                    DEVICE,
+                    progress_label=f"{log_prefix} {capacity_label} | {split_label} {fold_idx}",
+                    progress_interval=CONFIG.diffusion_log_interval,
+                )
+                val_loss = eval_diffusion_epoch(
+                    model,
+                    eval_loader,
+                    scheduler,
+                    DEVICE,
+                    progress_label=f"{log_prefix} {capacity_label} | {split_label} {fold_idx}",
+                    progress_interval=CONFIG.diffusion_log_interval,
+                    eval_split_name="Test",
+                )
+            else:
+                train_loss = train_epoch(
+                    model,
+                    train_loader,
+                    optimizer,
+                    CRITERION,
+                    DEVICE,
+                    model_type=model_type,
+                    noise_level=noise_level,
+                )
+                val_loss = eval_epoch(
+                    model,
+                    eval_loader,
+                    CRITERION,
+                    DEVICE,
+                    model_type=model_type,
+                    noise_level=noise_level,
+                )
             train_losses.append(train_loss)
             val_losses.append(val_loss)
 
             print(
-                f"{log_prefix} Latent={latent_dim} | Fold {fold_idx} | "
+                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
                 f"Epoch {epoch}/{CONFIG.epochs} | "
-                f"Train Loss={train_loss:.6f} | Val Loss={val_loss:.6f}"
+                f"Train Loss={train_loss:.6f} | {'Test' if is_diffusion(model_type) else 'Val'} Loss={val_loss:.6f}"
             )
 
-        metrics = evaluate_metrics(model, val_loader, CRITERION, DEVICE, model_type=model_type)
+        if model_type == "diffusion":
+            metrics = evaluate_diffusion_metrics(model, eval_loader, scheduler, DEVICE)
+            metrics["noise_mse"] = val_losses[-1]
+        else:
+            metrics = evaluate_metrics(model, eval_loader, CRITERION, DEVICE, model_type=model_type)
+            
         fold_metrics.append(metrics)
-        print(
-            f"{log_prefix} Latent={latent_dim} | Fold {fold_idx} | "
-            f"MSE={metrics['mse']:.6f}, PSNR={metrics['psnr']:.4f}, SSIM={metrics['ssim']:.4f}"
-        )
+        if model_type == "diffusion":
+            print(
+                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
+                f"Noise MSE={metrics['noise_mse']:.6f}, Recon MSE={metrics['mse']:.6f}, "
+                f"PSNR={format_metric(metrics['psnr'])}, SSIM={format_metric(metrics['ssim'])}"
+            )
+        else:
+            print(
+                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
+                f"MSE={metrics['mse']:.6f}, PSNR={metrics['psnr']:.4f}, SSIM={metrics['ssim']:.4f}"
+            )
 
         # Track the best model across folds based on Mean Squared Error
-        if best_fold_payload is None or metrics["mse"] < best_fold_payload["metrics"]["mse"]:
+        comparison_mse = metrics["noise_mse"] if model_type == "diffusion" else metrics["mse"]
+        best_comparison_mse = (
+            best_fold_payload["metrics"].get("noise_mse", best_fold_payload["metrics"]["mse"])
+            if best_fold_payload is not None
+            else None
+        )
+        if best_fold_payload is None or comparison_mse < best_comparison_mse:
             best_fold_payload = {
                 "metrics": metrics,
                 "model_state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
                 "val_indices": val_indices.tolist(),
+                "uses_test_split": is_diffusion(model_type),
                 "train_losses": train_losses,
                 "val_losses": val_losses,
             }
 
-    all_losses = [entry["mse"] for entry in fold_metrics]
+    all_losses = [entry.get("noise_mse", entry["mse"]) for entry in fold_metrics]
     all_psnr = [entry["psnr"] for entry in fold_metrics]
     all_ssim = [entry["ssim"] for entry in fold_metrics]
     
     mean_loss = float(np.mean(all_losses))
     std_loss = float(np.std(all_losses))
-    mean_psnr = float(np.mean(all_psnr))
-    mean_ssim = float(np.mean(all_ssim))
+    mean_psnr = mean_metric(all_psnr)
+    mean_ssim = mean_metric(all_ssim)
 
-    print(
-        f"{log_prefix} Latent={latent_dim} | Mean Loss={mean_loss:.6f} ± {std_loss:.6f} | "
-        f"Mean PSNR={mean_psnr:.4f} | Mean SSIM={mean_ssim:.4f}"
-    )
+    if model_type == "diffusion":
+        print(
+            f"{log_prefix} {capacity_label} | Mean Noise Loss={mean_loss:.6f} ± {std_loss:.6f} | "
+            f"Mean PSNR={format_metric(mean_psnr)} | Mean SSIM={format_metric(mean_ssim)}"
+        )
+    else:
+        print(
+            f"{log_prefix} {capacity_label} | Mean Loss={mean_loss:.6f} ± {std_loss:.6f} | "
+            f"Mean PSNR={format_metric(mean_psnr)} | Mean SSIM={format_metric(mean_ssim)}"
+        )
 
     return {
         "mean_loss": mean_loss,
@@ -828,28 +1209,57 @@ def run_kfold_experiment(
 
 
 def main() -> None:
+    global CONFIG
+    args = parse_args()
+    selected_models = args.models
+    selected_datasets = args.datasets
+    config_updates: dict[str, object] = {}
+    if args.epochs is not None:
+        config_updates["epochs"] = args.epochs
+    if args.batch_size is not None:
+        config_updates["batch_size"] = args.batch_size
+    if args.n_splits is not None:
+        config_updates["n_splits"] = args.n_splits
+    if args.base_channels is not None:
+        config_updates["latent_dims"] = tuple(args.base_channels)
+    if args.diffusion_timesteps is not None:
+        config_updates["diffusion_timesteps"] = args.diffusion_timesteps
+    if args.diffusion_log_interval is not None:
+        config_updates["diffusion_log_interval"] = args.diffusion_log_interval
+    if args.diffusion_val_fraction is not None:
+        config_updates["diffusion_val_fraction"] = args.diffusion_val_fraction
+    if config_updates:
+        CONFIG = replace(CONFIG, **config_updates)
+
     set_seed(CONFIG.random_seed)
     CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
+    diffusion_output_dirs = ensure_diffusion_output_dirs(CONFIG.output_dir)
 
-    print(f"Using device: {DEVICE}")
+    print(f"Using device: {device}")
+    print(f"Selected datasets: {', '.join(dataset.upper() for dataset in selected_datasets)}")
+    print(f"Selected models: {', '.join(model.upper() for model in selected_models)}")
     all_results: list[dict[str, float | int | str]] = []
     
-    for dataset_name in RUN_DATASETS:
-        dataset = get_dataset(dataset_name=dataset_name)
-        print(f"Dataset {dataset_name.upper()} size: {len(dataset)} samples")
+    for dataset_name in selected_datasets:
+        dataset = get_dataset(dataset_name=dataset_name, train=True)
+        print(f"Dataset {dataset_name.upper()} train size: {len(dataset)} samples")
 
         for latent_dim in CONFIG.latent_dims:
-            for model_type in RUN_MODELS:
+            for model_type in selected_models:
+                capacity_label = format_capacity_label(model_type, latent_dim)
                 
                 noise_level = DAE_NOISE_LEVEL if is_denoising(model_type) else 0.0
                 noise_label = f"{noise_level:g}"
                 
-                if is_denoising(model_type):
+                if model_type == "diffusion":
+                    print()
+                    print_diffusion_experiment_header(dataset_name, latent_dim)
+                elif is_denoising(model_type):
                     print(f"\nRunning {model_type.upper()} with noise={noise_label}")
-                    print(f"[{dataset_name.upper()} | {model_type.upper()} | noise={noise_label}] Latent={latent_dim}")
+                    print(f"[{dataset_name.upper()} | {model_type.upper()} | noise={noise_label}] {capacity_label}")
                 else:
                     print(f"\nRunning {model_type.upper()}")
-                    print(f"[{dataset_name.upper()} | {model_type.upper()}] Latent={latent_dim}")
+                    print(f"[{dataset_name.upper()} | {model_type.upper()}] {capacity_label}")
 
                 experiment_result = run_kfold_experiment(
                     latent_dim,
@@ -875,57 +1285,100 @@ def main() -> None:
                 if best_fold is None:
                     continue
 
+                scheduler = None
                 if is_vae_model(model_type):
                     model_class = VariationalAutoencoder
+                    model = model_class(latent_dim=latent_dim).to(DEVICE)
                 elif model_type in ("ae", "dae"):
                     model_class = FullyConnectedAutoencoder
+                    model = model_class(latent_dim=latent_dim).to(DEVICE)
+                elif model_type == "diffusion":
+                    model = DiffusionUNet(base_channels=latent_dim).to(DEVICE)
+                    scheduler = get_noise_schedule(CONFIG.diffusion_timesteps, DEVICE)
                 else:
                     raise NotImplementedError(f"Model visualization unsupported for {model_type}")
                     
-                model = model_class(latent_dim=latent_dim).to(DEVICE)
                 model.load_state_dict(best_fold["model_state_dict"])
                 
-                best_val_subset = Subset(dataset, best_fold["val_indices"])
-                best_val_loader = create_loader(best_val_subset, shuffle=False)
+                if model_type == "diffusion":
+                    best_eval_dataset = get_dataset(dataset_name=dataset_name, train=False)
+                    best_val_loader = create_loader(best_eval_dataset, shuffle=False)
+                else:
+                    best_val_subset = Subset(dataset, best_fold["val_indices"])
+                    best_val_loader = create_loader(best_val_subset, shuffle=False)
                 
                 artifact_stem = f"{dataset_name}_{model_type}"
                 if is_denoising(model_type):
                     artifact_stem = f"{artifact_stem}_noise_{noise_label}"
 
-                show_reconstructions(
-                    model,
-                    best_val_loader,
-                    DEVICE,
-                    CONFIG.output_dir / f"{artifact_stem}_latent_{latent_dim}.png",
-                    model_type=model_type,
-                    noise_level=noise_level,
-                )
-                plot_latent_space(
-                    model,
-                    best_val_loader,
-                    DEVICE,
-                    CONFIG.output_dir / f"{artifact_stem}_latent_space_{latent_dim}.png",
-                )
-                plot_loss_curves(
-                    best_fold["train_losses"],
-                    best_fold["val_losses"],
-                    latent_dim,
-                    CONFIG.output_dir / f"{artifact_stem}_loss_curve_{latent_dim}.png",
-                )
-                
-                if is_vae_model(model_type):
-                    generate_samples(
-                        model,
-                        latent_dim,
-                        DEVICE,
-                        save_path=CONFIG.output_dir / f"vae_generated_{dataset_name}_latent_{latent_dim}.png",
+                if model_type == "diffusion":
+                    diffusion_config = build_diffusion_artifact_config(dataset_name, latent_dim)
+                    plot_loss_curves(
+                        best_fold["train_losses"],
+                        best_fold["val_losses"],
+                        diffusion_output_dirs["loss_curves"]
+                        / f"{format_experiment_name(diffusion_config, 'diffusion_loss', include_epochs=True)}.png",
+                        title=(
+                            f"Diffusion Training Loss "
+                            f"(Base Channels = {latent_dim}, Timesteps = {CONFIG.diffusion_timesteps})"
+                        ),
+                        y_label="MSE Loss",
                     )
-                    interpolate_images(
+                    generated_samples = sample_images(
+                        model,
+                        scheduler,
+                        DEVICE,
+                        num_samples=10,
+                    )
+                    plot_image_grid(
+                        generated_samples,
+                        diffusion_output_dirs["samples"]
+                        / f"{format_experiment_name(diffusion_config, 'samples')}.png",
+                        title=f"Diffusion Generated Samples ({dataset_name.upper()}, Base Channels = {latent_dim})",
+                    )
+                    plot_diffusion_snapshots(
+                        model,
+                        scheduler,
+                        DEVICE,
+                        dataset_name=dataset_name,
+                        base_channels=latent_dim,
+                        save_path=diffusion_output_dirs["snapshots"]
+                        / f"{format_experiment_name(diffusion_config, 'snapshots')}.png",
+                    )
+                else:
+                    plot_loss_curves(
+                        best_fold["train_losses"],
+                        best_fold["val_losses"],
+                        CONFIG.output_dir / f"{artifact_stem}_loss_curve_{latent_dim}.png",
+                    )
+                    show_reconstructions(
                         model,
                         best_val_loader,
                         DEVICE,
-                        save_path=CONFIG.output_dir / f"vae_interpolation_{dataset_name}_latent_{latent_dim}.png",
+                        CONFIG.output_dir / f"{artifact_stem}_latent_{latent_dim}.png",
+                        model_type=model_type,
+                        noise_level=noise_level,
                     )
+                    plot_latent_space(
+                        model,
+                        best_val_loader,
+                        DEVICE,
+                        CONFIG.output_dir / f"{artifact_stem}_latent_space_{latent_dim}.png",
+                    )
+                    
+                    if is_vae_model(model_type):
+                        generate_samples(
+                            model,
+                            latent_dim,
+                            DEVICE,
+                            save_path=CONFIG.output_dir / f"vae_generated_{dataset_name}_latent_{latent_dim}.png",
+                        )
+                        interpolate_images(
+                            model,
+                            best_val_loader,
+                            DEVICE,
+                            save_path=CONFIG.output_dir / f"vae_interpolation_{dataset_name}_latent_{latent_dim}.png",
+                        )
 
             latent_rows = [
                 row
@@ -936,14 +1389,14 @@ def main() -> None:
                 latent_rows,
                 dataset_name,
                 latent_dim,
-                CONFIG.output_dir / f"{dataset_name}_model_comparison_latent_{latent_dim}.png",
+                CONFIG.output_dir / f"{dataset_name}_model_comparison_capacity_{latent_dim}.png",
             )
 
         dataset_rows = [row for row in all_results if row["dataset_name"] == dataset_name]
         plot_metrics_vs_latent_by_model(
             dataset_rows,
             dataset_name,
-            CONFIG.output_dir / f"{dataset_name}_metrics_vs_latent_by_model.png",
+            CONFIG.output_dir / f"{dataset_name}_metrics_vs_capacity_by_model.png",
         )
 
     save_results_csv(all_results, CONFIG.output_dir / "kfold_results.csv")
@@ -951,11 +1404,13 @@ def main() -> None:
     print("\nFinal Summary")
     for row in all_results:
         noise_suffix = f" | noise={row['noise_level']}" if "noise_level" in row else ""
+        capacity_label = format_capacity_label(str(row["model_type"]), int(row["latent_dim"]))
+        loss_label = "Mean Noise Loss" if str(row["model_type"]) == "diffusion" else "Mean Loss"
         print(
             f"[{str(row['dataset_name']).upper()} | {str(row['model_type']).upper()}{noise_suffix}] "
-            f"Latent={row['latent_dim']} | Mean Loss={float(row['mean_loss']):.6f} ± "
-            f"{float(row['std_loss']):.6f} | PSNR={float(row['psnr']):.4f} | "
-            f"SSIM={float(row['ssim']):.4f}"
+            f"{capacity_label} | {loss_label}={float(row['mean_loss']):.6f} ± "
+            f"{float(row['std_loss']):.6f} | PSNR={format_metric(float(row['psnr']))} | "
+            f"SSIM={format_metric(float(row['ssim']))}"
         )
 
     print(f"\nArtifacts saved to: {CONFIG.output_dir.resolve()}")

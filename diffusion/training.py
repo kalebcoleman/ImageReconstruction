@@ -15,6 +15,17 @@ except ModuleNotFoundError:  # pragma: no cover - fallback used in lean envs.
 from diffusion.scheduler import DiffusionSchedule, predict_x0_from_noise, q_sample
 
 
+def _move_batch_to_device(
+    batch: tuple[torch.Tensor, ...],
+    device: torch.device,
+) -> tuple[torch.Tensor, ...]:
+    """Move every tensor in a batch tuple onto the active compute device."""
+    return tuple(
+        item.to(device, non_blocking=True) if torch.is_tensor(item) else item
+        for item in batch
+    )
+
+
 def _sample_timesteps(batch_size: int, schedule: DiffusionSchedule, device: torch.device) -> torch.Tensor:
     """Draw one random diffusion step for each image in the batch."""
     return torch.randint(
@@ -52,12 +63,21 @@ def _compute_batch_ssim(predictions: torch.Tensor, targets: torch.Tensor) -> flo
     return (numerator / denominator.clamp(min=1e-12)).mean().item()
 
 
+def _should_log_progress(batch_idx: int, total_batches: int, progress_interval: int | None) -> bool:
+    """Emit progress at a fixed interval and on the final batch."""
+    if progress_interval is None or progress_interval <= 0:
+        return False
+    return batch_idx % progress_interval == 0 or batch_idx == total_batches
+
+
 def train_diffusion_epoch(
     model: torch.nn.Module,
     loader: DataLoader,
     optimizer: Optimizer,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    progress_label: str | None = None,
+    progress_interval: int | None = None,
 ) -> float:
     """Train for one epoch with the standard DDPM noise-prediction objective.
 
@@ -70,10 +90,12 @@ def train_diffusion_epoch(
     model.train()
     running_loss = 0.0
 
-    for images, _ in loader:
-        images = images.to(device, non_blocking=True)
+    total_batches = max(len(loader), 1)
+
+    for batch_idx, batch in enumerate(loader, start=1):
+        images, _ = _move_batch_to_device(batch, device)
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
-        noise = torch.randn_like(images)
+        noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
 
         optimizer.zero_grad(set_to_none=True)
@@ -84,7 +106,14 @@ def train_diffusion_epoch(
 
         running_loss += loss.item()
 
-    return running_loss / max(len(loader), 1)
+        if progress_label and _should_log_progress(batch_idx, total_batches, progress_interval):
+            average_loss = running_loss / batch_idx
+            print(
+                f"{progress_label} | Train Batch {batch_idx}/{total_batches} | "
+                f"Avg Loss={average_loss:.6f}"
+            )
+
+    return running_loss / total_batches
 
 
 @torch.no_grad()
@@ -93,21 +122,33 @@ def eval_diffusion_epoch(
     loader: DataLoader,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    progress_label: str | None = None,
+    progress_interval: int | None = None,
+    eval_split_name: str = "Val",
 ) -> float:
-    """Validation loss for diffusion uses the same noise-prediction objective."""
+    """Evaluation loss for diffusion uses the same noise-prediction objective."""
 
     model.eval()
     running_loss = 0.0
 
-    for images, _ in loader:
-        images = images.to(device, non_blocking=True)
+    total_batches = max(len(loader), 1)
+
+    for batch_idx, batch in enumerate(loader, start=1):
+        images, _ = _move_batch_to_device(batch, device)
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
-        noise = torch.randn_like(images)
+        noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
         predicted_noise = model(noisy_images, timesteps)
         running_loss += F.mse_loss(predicted_noise, noise).item()
 
-    return running_loss / max(len(loader), 1)
+        if progress_label and _should_log_progress(batch_idx, total_batches, progress_interval):
+            average_loss = running_loss / batch_idx
+            print(
+                f"{progress_label} | {eval_split_name} Batch {batch_idx}/{total_batches} | "
+                f"Avg Loss={average_loss:.6f}"
+            )
+
+    return running_loss / total_batches
 
 
 @torch.no_grad()
@@ -132,10 +173,10 @@ def evaluate_diffusion_metrics(
     ssim_total = 0.0
     num_batches = 0
 
-    for images, _ in loader:
-        images = images.to(device, non_blocking=True)
+    for batch in loader:
+        images, _ = _move_batch_to_device(batch, device)
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
-        noise = torch.randn_like(images)
+        noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
         predicted_noise = model(noisy_images, timesteps)
         reconstructed = predict_x0_from_noise(

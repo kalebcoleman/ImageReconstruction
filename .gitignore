@@ -1,0 +1,6 @@
+.omx/
+__pycache__/
+diffusion/__pycache__/
+outputs/
+*.py[cod]
+.DS_Store
