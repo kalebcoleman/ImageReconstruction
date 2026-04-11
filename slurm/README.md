@@ -137,7 +137,7 @@ Why this large sweep is still defensible:
 Use `run_exp.slurm` to rerun one config cleanly:
 
 ```bash
-sbatch --export=ALL,MODEL=diffusion,DATASET=mnist,EPOCHS=15,BATCH_SIZE=128,LR=1e-3,SEED=42,TIMESTEPS=250,BASE_CHANNELS=16,OUTPUT_DIR=/scratch/$USER/image-reconstruction/outputs,DATA_DIR=/shared/datasets/image-reconstruction slurm/run_exp.slurm
+sbatch --export=ALL,MODEL=diffusion,DATASET=mnist,EPOCHS=15,BATCH_SIZE=128,LR=1e-3,SEED=42,TIMESTEPS=250,BASE_CHANNELS=16,OUTPUT_DIR=/scratch/$USER/image-reconstruction/outputs,DATA_DIR=/scratch/$USER/image-reconstruction/data slurm/run_exp.slurm
 ```
 
 This is useful for:
@@ -176,11 +176,14 @@ Expect the large sweep to cost noticeably more than the medium sweep because:
 
 ## Dataset handling
 
-By default the scripts require a pre-populated dataset cache:
+By default the scripts prefer user-writable storage:
 
 ```bash
-DATA_DIR=/shared/datasets/image-reconstruction
+DATA_DIR=/scratch/$USER/image-reconstruction/data
+OUTPUT_DIR=/scratch/$USER/image-reconstruction/outputs
 ```
+
+If your cluster already provides a shared read-only dataset cache, point `DATA_DIR` there explicitly. The scripts will use an existing shared path, but they will no longer blindly try to create protected top-level directories such as `/shared/...`.
 
 If the dataset is missing and you explicitly want the job to download it, pass:
 

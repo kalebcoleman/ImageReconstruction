@@ -38,8 +38,9 @@ SAMPLE_COUNT="${SAMPLE_COUNT:-12}"
 NUM_WORKERS="${NUM_WORKERS:-$(default_num_workers 4)}"
 DIFFUSION_LOG_INTERVAL="${DIFFUSION_LOG_INTERVAL:-25}"
 DOWNLOAD="${DOWNLOAD:-0}"
-DATA_DIR="${DATA_DIR:-${REPO_ROOT}/data}"
-OUTPUT_DIR="${OUTPUT_DIR:-${REPO_ROOT}/outputs}"
+STORAGE_ROOT="${STORAGE_ROOT:-$(default_storage_root "${REPO_ROOT}")}"
+DATA_DIR="${DATA_DIR:-${STORAGE_ROOT}/data}"
+OUTPUT_DIR="${OUTPUT_DIR:-${STORAGE_ROOT}/outputs}"
 
 if [[ -z "${RUN_NAME:-}" ]]; then
   lr_tag="$(sanitize_tag "${LR}")"
@@ -55,7 +56,8 @@ TASK_TMP_ROOT="${OUTPUT_DIR}/_slurm_tmp/${RUN_NAME}"
 load_cluster_modules
 activate_environment "${REPO_ROOT}"
 
-mkdir -p "${REPO_ROOT}/logs" "${OUTPUT_DIR}" "${DATA_DIR}"
+ensure_log_directory_ready "${REPO_ROOT}/logs"
+ensure_output_directory_ready "${OUTPUT_DIR}"
 ensure_dataset_ready "${DATASET}" "${DATA_DIR}" "${DOWNLOAD}"
 configure_python_runtime "${TASK_TMP_ROOT}" 4
 
@@ -76,6 +78,7 @@ echo "num_workers: ${NUM_WORKERS}"
 echo "timesteps: ${TIMESTEPS}"
 echo "base_channels: ${BASE_CHANNELS}"
 echo "time_dim: ${TIME_DIM}"
+echo "data_dir: ${DATA_DIR}"
 echo "output_dir: ${OUTPUT_DIR}"
 echo "run_name: ${RUN_NAME}"
 if command -v nvidia-smi >/dev/null 2>&1; then

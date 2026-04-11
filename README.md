@@ -101,7 +101,7 @@ python3 train.py \
   --batch_size 256 \
   --lr 1e-3 \
   --seed 42 \
-  --data_dir /shared/datasets/image-reconstruction \
+  --data_dir /scratch/$USER/image-reconstruction/data \
   --output_dir /scratch/$USER/image-reconstruction-runs \
   --run_name slurm_job_${SLURM_JOB_ID} \
   --num_workers 4 \
@@ -139,7 +139,7 @@ python3 train.py \
   --batch_size 256 \
   --lr 1e-3 \
   --seed 42 \
-  --data_dir /shared/datasets/image-reconstruction \
+  --data_dir /scratch/$USER/image-reconstruction/data \
   --output_dir /scratch/$USER/image-reconstruction-runs \
   --run_name job_${SLURM_JOB_ID} \
   --num_workers ${SLURM_CPUS_PER_TASK:-4} \
@@ -162,7 +162,7 @@ for seed in 1 2; do
       --batch_size 256 \
       --lr 1e-3 \
       --seed "${seed}" \
-      --data_dir /shared/datasets/image-reconstruction \
+      --data_dir /scratch/$USER/image-reconstruction/data \
       --output_dir /scratch/$USER/image-reconstruction-runs \
       --run_name seed${seed}_ch${channels} \
       --num_workers 4 \

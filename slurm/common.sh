@@ -1,5 +1,59 @@
 #!/bin/bash
 
+default_storage_root() {
+  local repo_root="$1"
+
+  if [[ -n "${USER:-}" && -d "/scratch/${USER}" ]]; then
+    printf '%s\n' "/scratch/${USER}/image-reconstruction"
+    return
+  fi
+
+  if [[ -n "${SLURM_TMPDIR:-}" && -d "${SLURM_TMPDIR}" && -w "${SLURM_TMPDIR}" ]]; then
+    printf '%s\n' "${SLURM_TMPDIR}/image-reconstruction"
+    return
+  fi
+
+  printf '%s\n' "${repo_root}"
+}
+
+
+nearest_existing_parent() {
+  local path="$1"
+  local probe="${path}"
+
+  while [[ ! -e "${probe}" && "${probe}" != "/" ]]; do
+    probe="$(dirname "${probe}")"
+  done
+
+  printf '%s\n' "${probe}"
+}
+
+
+ensure_directory_ready() {
+  local path="$1"
+  local label="$2"
+
+  if [[ -d "${path}" ]]; then
+    return
+  fi
+
+  if [[ -e "${path}" && ! -d "${path}" ]]; then
+    echo "${label} exists but is not a directory: ${path}" >&2
+    exit 1
+  fi
+
+  local existing_parent
+  existing_parent="$(nearest_existing_parent "${path}")"
+  if [[ ! -w "${existing_parent}" ]]; then
+    echo "${label} does not exist and cannot be created: ${path}" >&2
+    echo "Nearest existing parent is not writable: ${existing_parent}" >&2
+    echo "Set ${label^^} to a user-writable location such as /scratch/\$USER/image-reconstruction/..." >&2
+    exit 1
+  fi
+
+  mkdir -p "${path}"
+}
+
 activate_environment() {
   local repo_root="$1"
 
@@ -64,7 +118,7 @@ ensure_dataset_ready() {
   local data_dir="$2"
   local download="${3:-0}"
 
-  mkdir -p "${data_dir}"
+  ensure_directory_ready "${data_dir}" "Data directory"
   if [[ "${download}" == "1" ]]; then
     return
   fi
@@ -76,6 +130,18 @@ ensure_dataset_ready() {
     echo "Populate the dataset on shared storage first, or resubmit with DOWNLOAD=1." >&2
     exit 1
   fi
+}
+
+
+ensure_output_directory_ready() {
+  local output_dir="$1"
+  ensure_directory_ready "${output_dir}" "Output directory"
+}
+
+
+ensure_log_directory_ready() {
+  local log_dir="$1"
+  ensure_directory_ready "${log_dir}" "Log directory"
 }
 
 default_num_workers() {
@@ -102,7 +168,9 @@ configure_python_runtime() {
   local task_tmp_root="$1"
   local omp_threads="${2:-4}"
 
-  mkdir -p "${task_tmp_root}" "${task_tmp_root}/matplotlib" "${task_tmp_root}/cache"
+  ensure_directory_ready "${task_tmp_root}" "Task temp directory"
+  ensure_directory_ready "${task_tmp_root}/matplotlib" "Matplotlib cache directory"
+  ensure_directory_ready "${task_tmp_root}/cache" "XDG cache directory"
 
   export PYTHONUNBUFFERED=1
   export OMP_NUM_THREADS="${OMP_NUM_THREADS:-${omp_threads}}"
@@ -113,7 +181,9 @@ configure_python_runtime() {
   export XDG_CACHE_HOME="${task_tmp_root}/cache"
   export TMPDIR="${SLURM_TMPDIR:-${task_tmp_root}}"
 
-  mkdir -p "${MPLCONFIGDIR}" "${XDG_CACHE_HOME}" "${TMPDIR}"
+  ensure_directory_ready "${MPLCONFIGDIR}" "Matplotlib cache directory"
+  ensure_directory_ready "${XDG_CACHE_HOME}" "XDG cache directory"
+  ensure_directory_ready "${TMPDIR}" "Temporary directory"
 }
 
 print_command() {
