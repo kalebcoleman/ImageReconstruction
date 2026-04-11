@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import math
 
 import torch
@@ -13,6 +14,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback used in lean envs.
     StructuralSimilarityIndexMeasure = None
 
 from diffusion.scheduler import DiffusionSchedule, predict_x0_from_noise, q_sample
+
+
+LOGGER = logging.getLogger(__name__)
 
 
 def _move_batch_to_device(
@@ -108,7 +112,7 @@ def train_diffusion_epoch(
 
         if progress_label and _should_log_progress(batch_idx, total_batches, progress_interval):
             average_loss = running_loss / batch_idx
-            print(
+            LOGGER.info(
                 f"{progress_label} | Train Batch {batch_idx}/{total_batches} | "
                 f"Avg Loss={average_loss:.6f}"
             )
@@ -143,7 +147,7 @@ def eval_diffusion_epoch(
 
         if progress_label and _should_log_progress(batch_idx, total_batches, progress_interval):
             average_loss = running_loss / batch_idx
-            print(
+            LOGGER.info(
                 f"{progress_label} | {eval_split_name} Batch {batch_idx}/{total_batches} | "
                 f"Avg Loss={average_loss:.6f}"
             )

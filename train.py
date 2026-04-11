@@ -2,19 +2,36 @@ from __future__ import annotations
 
 import argparse
 import csv
+import json
+import logging
 import math
+import os
 import random
-from dataclasses import dataclass, replace
+import re
+import socket
+import subprocess
+import sys
+import tempfile
+from dataclasses import asdict, dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Any
+
+MPL_CACHE_DIR = Path(tempfile.gettempdir()) / "image_reconstruction_matplotlib"
+MPL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+os.environ.setdefault("MPLCONFIGDIR", str(MPL_CACHE_DIR))
+os.environ.setdefault("XDG_CACHE_HOME", str(MPL_CACHE_DIR))
 
 import matplotlib
 import numpy as np
 import torch
+import torch.backends.cudnn as cudnn
 import torch.nn as nn
 from sklearn.decomposition import PCA
 from sklearn.model_selection import KFold
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset, Subset
+
 try:
     from torchmetrics.image import StructuralSimilarityIndexMeasure
 except ModuleNotFoundError:
@@ -22,66 +39,486 @@ except ModuleNotFoundError:
 from torchvision import datasets, transforms
 
 from diffusion.model import DiffusionUNet
+from diffusion.sampling import sample_images
 from diffusion.scheduler import get_noise_schedule
 from diffusion.training import (
-    train_diffusion_epoch,
+    _compute_batch_ssim,
     eval_diffusion_epoch,
     evaluate_diffusion_metrics,
-    _compute_batch_ssim,
+    train_diffusion_epoch,
 )
-from diffusion.sampling import sample_images
 
-# Configure matplotlib for headless environments
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
 
-# ==============================================================================
-# 1. CONFIG & CONSTANTS
-# ==============================================================================
+
+LOGGER = logging.getLogger("image_reconstruction")
+CRITERION = nn.MSELoss()
+DATASET_TRANSFORM = transforms.ToTensor()
+DATASET_CACHE: dict[tuple[str, bool, str, bool], datasets.VisionDataset] = {}
+SUPPORTED_MODELS = ("ae", "dae", "vae", "diffusion")
+SUPPORTED_DATASETS: dict[str, type[datasets.VisionDataset]] = {
+    "mnist": datasets.MNIST,
+    "fashion": datasets.FashionMNIST,
+    "fashion-mnist": datasets.FashionMNIST,
+    "fashion_mnist": datasets.FashionMNIST,
+}
+
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    """
-    Configuration for the training pipeline.
-    Grouping parameters here makes it easy to track and change experiment settings.
-    """
-    data_dir: Path = Path("./data")          # Directory to download/load dataset
-    output_dir: Path = Path("./outputs")     # Directory to save all artifacts and results
-    batch_size: int = 8                      # Number of samples per batch
-    epochs: int = 1                          # Number of epochs to train
-    learning_rate: float = 1e-3              # Learning rate for the optimizer
-    n_splits: int = 2                        # K-Fold Cross Validation splits
-    random_seed: int = 42                    # Seed for reproducibility
-    latent_dims: tuple[int, ...] = (8,)      # Different latent dimensions to evaluate
-    num_workers: int = 0                     # Number of workers for DataLoader
-    diffusion_timesteps: int = 10            # Number of timesteps for diffusion models
-    diffusion_log_interval: int = 250        # Batch interval for diffusion progress logs
-    diffusion_val_fraction: float = 0.1      # Deprecated: diffusion now uses the standard train/test split
-
-CONFIG = ExperimentConfig()
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-DEVICE = device
-CRITERION = nn.MSELoss()                     # Standard loss for AE and DAE
-
-# Cache datasets in memory to avoid multiple loading operations
-DATASET_CACHE: dict[tuple[str, bool], datasets.VisionDataset] = {}
-
-# Constants for running experiments
-RUN_DATASETS = ["mnist"]                     # Add more datasets if needed
-RUN_MODELS = ["ae", "dae", "vae", "diffusion"]
-DAE_NOISE_LEVEL = 0.2                        # Default noise standard deviation for DAE
+    model: str = "all"
+    dataset: str = "mnist"
+    epochs: int = 1
+    batch_size: int = 8
+    lr: float = 1e-3
+    seed: int = 42
+    data_dir: Path = Path("./data")
+    output_dir: Path = Path("./outputs")
+    run_name: str | None = None
+    num_workers: int = 0
+    download: bool = False
+    latent_dim: int = 8
+    timesteps: int = 10
+    base_channels: int = 8
+    time_dim: int = 64
+    beta_start: float = 1e-4
+    beta_end: float = 2e-2
+    sample_count: int = 10
+    n_splits: int = 2
+    dae_noise_level: float = 0.2
+    diffusion_log_interval: int = 250
 
 
-# ==============================================================================
-# 2. MODELS (Autoencoder, Variational Autoencoder)
-# ==============================================================================
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Train image reconstruction models.")
+    parser.add_argument(
+        "--model",
+        choices=(*SUPPORTED_MODELS, "all"),
+        default="all",
+        help="Model to train. Use 'all' to run the historical multi-model sweep.",
+    )
+    parser.add_argument(
+        "--models",
+        nargs="+",
+        choices=SUPPORTED_MODELS,
+        help="Compatibility alias for the old multi-model sweep interface.",
+    )
+    parser.add_argument(
+        "--dataset",
+        choices=tuple(SUPPORTED_DATASETS),
+        default="mnist",
+        help="Dataset to train on.",
+    )
+    parser.add_argument(
+        "--datasets",
+        nargs="+",
+        choices=tuple(SUPPORTED_DATASETS),
+        help="Compatibility alias for the old multi-dataset sweep interface.",
+    )
+    parser.add_argument("--epochs", type=int, default=ExperimentConfig.epochs)
+    parser.add_argument("--batch_size", "--batch-size", dest="batch_size", type=int, default=ExperimentConfig.batch_size)
+    parser.add_argument("--lr", "--learning-rate", dest="lr", type=float, default=ExperimentConfig.lr, help="Learning rate.")
+    parser.add_argument("--seed", type=int, default=ExperimentConfig.seed)
+    parser.add_argument("--data_dir", "--data-dir", dest="data_dir", type=Path, default=ExperimentConfig.data_dir)
+    parser.add_argument("--output_dir", "--output-dir", dest="output_dir", type=Path, default=ExperimentConfig.output_dir)
+    parser.add_argument("--run_name", "--run-name", dest="run_name", default=None)
+    parser.add_argument("--num_workers", "--num-workers", "--workers", dest="num_workers", type=int, default=ExperimentConfig.num_workers)
+    parser.add_argument(
+        "--download",
+        action=argparse.BooleanOptionalAction,
+        default=ExperimentConfig.download,
+        help="Allow dataset downloads when files are missing. Defaults to false for cluster safety.",
+    )
+    parser.add_argument("--latent_dim", "--latent-dim", dest="latent_dim", type=int, default=ExperimentConfig.latent_dim)
+    parser.add_argument(
+        "--timesteps",
+        "--diffusion-timesteps",
+        "--diffusion_timesteps",
+        dest="timesteps",
+        type=int,
+        default=ExperimentConfig.timesteps,
+    )
+    parser.add_argument(
+        "--base_channels",
+        "--base-channels",
+        "--diffusion-base-channels",
+        "--model-width",
+        dest="base_channels",
+        type=int,
+        default=ExperimentConfig.base_channels,
+    )
+    parser.add_argument("--time_dim", "--time-dim", dest="time_dim", type=int, default=ExperimentConfig.time_dim)
+    parser.add_argument("--beta_start", "--beta-start", dest="beta_start", type=float, default=ExperimentConfig.beta_start)
+    parser.add_argument("--beta_end", "--beta-end", dest="beta_end", type=float, default=ExperimentConfig.beta_end)
+    parser.add_argument("--sample_count", "--sample-count", dest="sample_count", type=int, default=ExperimentConfig.sample_count)
+    parser.add_argument("--n_splits", "--n-splits", dest="n_splits", type=int, default=ExperimentConfig.n_splits)
+    parser.add_argument(
+        "--diffusion_log_interval",
+        "--diffusion-log-interval",
+        dest="diffusion_log_interval",
+        type=int,
+        default=ExperimentConfig.diffusion_log_interval,
+    )
+    parser.add_argument(
+        "--dae_noise_level",
+        "--dae-noise-level",
+        dest="dae_noise_level",
+        type=float,
+        default=ExperimentConfig.dae_noise_level,
+    )
+    args = parser.parse_args()
+
+    if args.epochs < 1:
+        parser.error("--epochs must be at least 1")
+    if args.batch_size < 1:
+        parser.error("--batch_size must be at least 1")
+    if args.num_workers < 0:
+        parser.error("--num_workers cannot be negative")
+    if args.n_splits < 2:
+        parser.error("--n_splits must be at least 2")
+    if args.timesteps < 1:
+        parser.error("--timesteps must be at least 1")
+    if args.base_channels < 1 or args.latent_dim < 1 or args.time_dim < 1:
+        parser.error("--base_channels, --latent_dim, and --time_dim must be at least 1")
+    if args.beta_start <= 0 or args.beta_end <= 0 or args.beta_end <= args.beta_start:
+        parser.error("--beta_end must be greater than --beta_start, and both must be positive")
+    if args.sample_count < 1:
+        parser.error("--sample_count must be at least 1")
+    if args.dae_noise_level < 0:
+        parser.error("--dae_noise_level cannot be negative")
+    if args.diffusion_log_interval < 0:
+        parser.error("--diffusion_log_interval cannot be negative")
+    if args.lr <= 0:
+        parser.error("--lr must be positive")
+
+    return args
+
+
+def normalize_dataset_name(dataset_name: str) -> str:
+    normalized = dataset_name.lower()
+    if normalized in {"fashion_mnist", "fashion-mnist"}:
+        return "fashion"
+    return normalized
+
+
+def resolve_selected_models(args: argparse.Namespace) -> list[str]:
+    if args.models:
+        return list(args.models)
+    if args.model == "all":
+        return list(SUPPORTED_MODELS)
+    return [args.model]
+
+
+def resolve_selected_datasets(args: argparse.Namespace) -> list[str]:
+    if args.datasets:
+        return [normalize_dataset_name(name) for name in args.datasets]
+    return [normalize_dataset_name(args.dataset)]
+
+
+def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
+    return ExperimentConfig(
+        model=args.model,
+        dataset=normalize_dataset_name(args.dataset),
+        epochs=args.epochs,
+        batch_size=args.batch_size,
+        lr=args.lr,
+        seed=args.seed,
+        data_dir=args.data_dir,
+        output_dir=args.output_dir,
+        run_name=args.run_name,
+        num_workers=args.num_workers,
+        download=args.download,
+        latent_dim=args.latent_dim,
+        timesteps=args.timesteps,
+        base_channels=args.base_channels,
+        time_dim=args.time_dim,
+        beta_start=args.beta_start,
+        beta_end=args.beta_end,
+        sample_count=args.sample_count,
+        n_splits=args.n_splits,
+        dae_noise_level=args.dae_noise_level,
+        diffusion_log_interval=args.diffusion_log_interval,
+    )
+
+
+def build_run_config(base_config: ExperimentConfig, dataset_name: str, model_name: str) -> ExperimentConfig:
+    return ExperimentConfig(
+        **{
+            **asdict(base_config),
+            "dataset": dataset_name,
+            "model": model_name,
+            "data_dir": Path(base_config.data_dir),
+            "output_dir": Path(base_config.output_dir),
+        }
+    )
+
+
+def slugify(value: str) -> str:
+    safe = re.sub(r"[^a-zA-Z0-9_-]+", "_", value.strip().lower())
+    safe = re.sub(r"_+", "_", safe).strip("_")
+    return safe or "run"
+
+
+def format_run_float(value: float) -> str:
+    if value == 0:
+        return "0"
+    magnitude = abs(value)
+    if magnitude < 1e-2 or magnitude >= 1e3:
+        text = f"{value:.0e}"
+        text = re.sub(r"e([+-])0*(\d+)", r"e\1\2", text)
+        return text.replace("e+", "e")
+    return f"{value:g}"
+
+
+def auto_run_name(config: ExperimentConfig, timestamp: datetime) -> str:
+    lr_tag = format_run_float(config.lr)
+    time_tag = timestamp.strftime("%Y-%m-%d_%H%M%S_%f")
+    if config.model == "diffusion":
+        return (
+            f"{config.dataset}_{config.model}_t{config.timesteps}_ch{config.base_channels}"
+            f"_bs{config.batch_size}_lr{lr_tag}_seed{config.seed}_{time_tag}"
+        )
+    return (
+        f"{config.dataset}_{config.model}_z{config.latent_dim}"
+        f"_bs{config.batch_size}_lr{lr_tag}_seed{config.seed}_{time_tag}"
+    )
+
+
+def resolve_run_dir(config: ExperimentConfig, *, timestamp: datetime) -> dict[str, Path]:
+    output_dir = Path(config.output_dir)
+    base_dir = output_dir / config.dataset / config.model
+    requested_name = slugify(config.run_name) if config.run_name else slugify(auto_run_name(config, timestamp))
+    base_dir.mkdir(parents=True, exist_ok=True)
+
+    suffix = 0
+    while True:
+        suffix_label = "" if suffix == 0 else f"_{suffix:02d}"
+        candidate = base_dir / f"{requested_name}{suffix_label}"
+        try:
+            candidate.mkdir(parents=False, exist_ok=False)
+        except FileExistsError:
+            suffix += 1
+            continue
+        break
+
+    paths = {
+        "root": candidate,
+        "checkpoints": candidate / "checkpoints",
+        "plots": candidate / "plots",
+        "samples": candidate / "samples",
+    }
+    for path in paths.values():
+        path.mkdir(parents=True, exist_ok=True)
+    return paths
+
+
+def setup_logging(run_dir: Path) -> Path:
+    if hasattr(sys.stdout, "reconfigure"):
+        sys.stdout.reconfigure(line_buffering=True, write_through=True)
+
+    log_path = run_dir / "train.log"
+    formatter = logging.Formatter("%(asctime)s | %(levelname)s | %(message)s")
+
+    console_handler = logging.StreamHandler(sys.stdout)
+    console_handler.setFormatter(formatter)
+
+    file_handler = logging.FileHandler(log_path, encoding="utf-8")
+    file_handler.setFormatter(formatter)
+
+    root_logger = logging.getLogger()
+    for handler in list(root_logger.handlers):
+        root_logger.removeHandler(handler)
+        handler.close()
+
+    root_logger.setLevel(logging.INFO)
+    root_logger.addHandler(console_handler)
+    root_logger.addHandler(file_handler)
+    root_logger.propagate = False
+    logging.captureWarnings(True)
+    return log_path
+
+
+def json_ready(value: Any) -> Any:
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, torch.device):
+        return str(value)
+    if isinstance(value, dict):
+        return {str(key): json_ready(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [json_ready(item) for item in value]
+    if isinstance(value, np.ndarray):
+        return value.tolist()
+    if isinstance(value, np.generic):
+        return value.item()
+    return value
+
+
+def collect_runtime_environment() -> dict[str, str]:
+    tracked_names = {
+        "CUDA_VISIBLE_DEVICES",
+        "OMP_NUM_THREADS",
+        "MKL_NUM_THREADS",
+        "OPENBLAS_NUM_THREADS",
+        "NUMEXPR_NUM_THREADS",
+        "TMPDIR",
+        "MPLCONFIGDIR",
+        "XDG_CACHE_HOME",
+    }
+    payload: dict[str, str] = {}
+    for name in sorted(os.environ):
+        if name.startswith("SLURM_") or name in tracked_names:
+            payload[name] = os.environ[name]
+    return payload
+
+
+def detect_git_commit(repo_root: Path) -> str | None:
+    try:
+        return subprocess.check_output(
+            ["git", "rev-parse", "HEAD"],
+            cwd=repo_root,
+            text=True,
+            stderr=subprocess.DEVNULL,
+        ).strip()
+    except (OSError, subprocess.CalledProcessError):
+        return None
+
+
+def save_config(config: ExperimentConfig, run_dir: Path, *, cli_args: list[str], resolved_paths: dict[str, Path]) -> Path:
+    config_payload = json_ready(asdict(config))
+    config_payload["cli_args"] = cli_args
+    config_payload["resolved_paths"] = json_ready(resolved_paths)
+    config_payload["hostname"] = socket.gethostname()
+    config_payload["saved_at"] = datetime.now().isoformat()
+    config_payload["environment"] = collect_runtime_environment()
+    config_payload["python_version"] = sys.version
+    config_payload["torch_version"] = torch.__version__
+    config_payload["numpy_version"] = np.__version__
+    git_commit = detect_git_commit(Path(__file__).resolve().parent)
+    if git_commit is not None:
+        config_payload["git_commit"] = git_commit
+    config_path = run_dir / "config.json"
+    config_path.write_text(json.dumps(config_payload, indent=2, sort_keys=True), encoding="utf-8")
+    return config_path
+
+
+def append_metrics_jsonl(path: Path, payload: dict[str, Any]) -> None:
+    with path.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(json_ready(payload), sort_keys=True))
+        handle.write("\n")
+
+
+def save_metrics_json(path: Path, payload: dict[str, Any]) -> None:
+    path.write_text(json.dumps(json_ready(payload), indent=2, sort_keys=True), encoding="utf-8")
+
+
+def seed_everything(seed: int) -> None:
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
+    cudnn.deterministic = True
+    cudnn.benchmark = False
+
+
+def dataset_missing_error(dataset_name: str, data_dir: Path) -> FileNotFoundError:
+    return FileNotFoundError(
+        f"{dataset_name.upper()} was not found under {data_dir.resolve()}. "
+        "Pre-download the dataset on a login node or rerun with --download."
+    )
+
+
+def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> datasets.VisionDataset:
+    dataset_key = normalize_dataset_name(dataset_name)
+    dataset_class = SUPPORTED_DATASETS.get(dataset_key)
+    if dataset_class is None:
+        raise ValueError(f"Unsupported dataset: {dataset_name}")
+
+    data_dir = Path(config.data_dir)
+    cache_key = (dataset_key, train, str(data_dir.resolve()), config.download)
+    if cache_key in DATASET_CACHE:
+        return DATASET_CACHE[cache_key]
+
+    if config.download:
+        data_dir.mkdir(parents=True, exist_ok=True)
+
+    try:
+        dataset = dataset_class(
+            root=str(data_dir),
+            train=train,
+            download=config.download,
+            transform=DATASET_TRANSFORM,
+        )
+    except RuntimeError as exc:
+        message = str(exc).lower()
+        if not config.download and ("dataset not found" in message or "not found" in message):
+            raise dataset_missing_error(dataset_key, data_dir) from exc
+        raise
+
+    DATASET_CACHE[cache_key] = dataset
+    return dataset
+
+
+def create_loader(dataset: Dataset, config: ExperimentConfig, *, shuffle: bool) -> DataLoader:
+    return DataLoader(
+        dataset,
+        batch_size=config.batch_size,
+        shuffle=shuffle,
+        num_workers=config.num_workers,
+        pin_memory=torch.cuda.is_available(),
+        persistent_workers=config.num_workers > 0,
+    )
+
+
+def build_experiment_splits(dataset_size: int, config: ExperimentConfig) -> list[tuple[int, np.ndarray, np.ndarray]]:
+    splitter = KFold(
+        n_splits=config.n_splits,
+        shuffle=True,
+        random_state=config.seed,
+    )
+    return [
+        (fold_idx, train_indices, val_indices)
+        for fold_idx, (train_indices, val_indices) in enumerate(splitter.split(range(dataset_size)), start=1)
+    ]
+
+
+def compute_psnr(mse: float) -> float:
+    mse = max(mse, 1e-12)
+    return 10.0 * math.log10(1.0 / mse)
+
+
+def is_denoising(model_type: str) -> bool:
+    return model_type == "dae"
+
+
+def is_vae_model(model_type: str) -> bool:
+    return model_type == "vae"
+
+
+def is_diffusion(model_type: str) -> bool:
+    return model_type == "diffusion"
+
+
+def is_finite_metric(value: float) -> bool:
+    return math.isfinite(value)
+
+
+def format_metric(value: float, precision: int = 4) -> str:
+    if not is_finite_metric(value):
+        return "N/A"
+    return f"{value:.{precision}f}"
+
+
+def mean_metric(values: list[float]) -> float:
+    finite_values = [value for value in values if is_finite_metric(value)]
+    if not finite_values:
+        return float("nan")
+    return float(np.mean(finite_values))
+
 
 class FullyConnectedAutoencoder(nn.Module):
-    """
-    Standard Fully Connected Autoencoder.
-    Compresses 28x28 images into a latent dimension and reconstructs them.
-    Used for both standard AE and Denoising AE (DAE).
-    """
     def __init__(self, latent_dim: int) -> None:
         super().__init__()
         self.encoder = nn.Sequential(
@@ -102,7 +539,6 @@ class FullyConnectedAutoencoder(nn.Module):
 
     def decode(self, latent: torch.Tensor) -> torch.Tensor:
         decoded = self.decoder(latent)
-        # Reshape flat output back into 1-channel image (e.g. 1x28x28 for MNIST)
         return decoded.view(-1, 1, 28, 28)
 
     def forward(self, inputs: torch.Tensor) -> torch.Tensor:
@@ -111,11 +547,6 @@ class FullyConnectedAutoencoder(nn.Module):
 
 
 class VariationalAutoencoder(nn.Module):
-    """
-    Variational Autoencoder (VAE).
-    Instead of projecting to a single latent point, it projects to a probability distribution,
-    which provides a more continuous and structured latent space.
-    """
     def __init__(self, latent_dim: int) -> None:
         super().__init__()
         hidden_dim = 400
@@ -124,10 +555,8 @@ class VariationalAutoencoder(nn.Module):
             nn.Linear(28 * 28, hidden_dim),
             nn.ReLU(),
         )
-        # VAE has separate linear layers for the mean (mu) and log-variance (logvar) of the distribution
         self.mu = nn.Linear(hidden_dim, latent_dim)
         self.logvar = nn.Linear(hidden_dim, latent_dim)
-        
         self.decoder = nn.Sequential(
             nn.Linear(latent_dim, hidden_dim),
             nn.ReLU(),
@@ -136,21 +565,15 @@ class VariationalAutoencoder(nn.Module):
         )
 
     def encode_features(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        """Encodes input to mu and logvar."""
         hidden = self.encoder(self.flatten(x))
         return self.mu(hidden), self.logvar(hidden)
 
     def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        """
-        The Reparameterization Trick.
-        Allows backpropagation through random sampling by computing: z = mu + std * epsilon
-        """
         std = torch.exp(0.5 * logvar)
         epsilon = torch.randn_like(std)
         return mu + std * epsilon
 
     def encode(self, x: torch.Tensor) -> torch.Tensor:
-        """Returns just the mean of the latent distribution for downstream tasks."""
         mu, _ = self.encode_features(x)
         return mu
 
@@ -159,7 +582,6 @@ class VariationalAutoencoder(nn.Module):
         return decoded.view(-1, 1, 28, 28)
 
     def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
-        """Full forward pass returning just the reconstructed output."""
         mu, _ = self.encode_features(x)
         return self.decode(mu)
 
@@ -170,262 +592,9 @@ class VariationalAutoencoder(nn.Module):
         return reconstructed, mu, logvar
 
 
-# ==============================================================================
-# 3. HELPER FUNCTIONS (Routing, Utilities)
-# ==============================================================================
-
-def set_seed(seed: int) -> None:
-    """Sets seed for reproducibility across random, numpy, and torch."""
-    random.seed(seed)
-    np.random.seed(seed)
-    torch.manual_seed(seed)
-    torch.cuda.manual_seed_all(seed)
-
-def is_denoising(model_type: str) -> bool:
-    """Explicitly check if the model type corresponds to a denoising task."""
-    return model_type == "dae"
-
-def is_vae_model(model_type: str) -> bool:
-    """Explicitly check if the model type corresponds to a VAE."""
-    return model_type == "vae"
-
-def is_diffusion(model_type: str) -> bool:
-    """Check if model type is diffusion."""
-    return model_type == "diffusion"
-
-
-def ensure_diffusion_output_dirs(output_root: Path) -> dict[str, Path]:
-    """Create and return the standard diffusion artifact directories."""
-    diffusion_root = output_root / "diffusion"
-    paths = {
-        "root": diffusion_root,
-        "loss_curves": diffusion_root / "loss_curves",
-        "samples": diffusion_root / "samples",
-        "snapshots": diffusion_root / "snapshots",
-    }
-    for path in paths.values():
-        path.mkdir(parents=True, exist_ok=True)
-    return paths
-
-
-def format_experiment_name(
-    config: dict[str, str | int],
-    artifact: str,
-    *,
-    include_epochs: bool = False,
-) -> str:
-    """Build consistent diffusion artifact filenames."""
-    parts = [
-        str(config["dataset"]).lower(),
-        artifact,
-        f"bc{config['base_channels']}",
-        f"t{config['timesteps']}",
-    ]
-    if include_epochs:
-        parts.append(f"e{config['epochs']}")
-    return "_".join(parts)
-
-
-def build_diffusion_artifact_config(dataset_name: str, base_channels: int) -> dict[str, str | int]:
-    """Centralize diffusion naming inputs so plots and logs stay aligned."""
-    return {
-        "dataset": dataset_name,
-        "base_channels": base_channels,
-        "timesteps": CONFIG.diffusion_timesteps,
-        "epochs": CONFIG.epochs,
-    }
-
-
-def print_diffusion_experiment_header(dataset_name: str, base_channels: int) -> None:
-    """Emit a clean experiment banner for diffusion runs."""
-    print("-" * 40)
-    print("Running Diffusion Model")
-    print(f"Dataset: {dataset_name.upper()}")
-    print(f"Base Channels: {base_channels}")
-    print(f"Timesteps: {CONFIG.diffusion_timesteps}")
-    print(f"Epochs: {CONFIG.epochs}")
-    print("-" * 40)
-
-
-def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> torch.Tensor:
-    """Normalize tensors for report-friendly visualization without touching model behavior."""
-    display_images = images.detach().cpu().float()
-    if rescale:
-        flat = display_images.reshape(display_images.shape[0], -1)
-        mins = flat.min(dim=1).values.view(-1, 1, 1, 1)
-        maxs = flat.max(dim=1).values.view(-1, 1, 1, 1)
-        display_images = (display_images - mins) / (maxs - mins).clamp_min(1e-8)
-    return display_images.clamp(0.0, 1.0)
-
-
-def parse_args() -> argparse.Namespace:
-    """Parse command-line overrides for the default experiment sweep."""
-    parser = argparse.ArgumentParser(description="Train image reconstruction models.")
-    parser.add_argument(
-        "--models",
-        nargs="+",
-        choices=RUN_MODELS,
-        default=RUN_MODELS,
-        help="Subset of models to train. Defaults to the full configured sweep.",
-    )
-    parser.add_argument(
-        "--datasets",
-        nargs="+",
-        choices=RUN_DATASETS,
-        default=RUN_DATASETS,
-        help="Subset of datasets to train on. Defaults to the full configured sweep.",
-    )
-    parser.add_argument(
-        "--epochs",
-        type=int,
-        help="Override the number of training epochs.",
-    )
-    parser.add_argument(
-        "--batch-size",
-        type=int,
-        help="Override the DataLoader batch size.",
-    )
-    parser.add_argument(
-        "--n-splits",
-        type=int,
-        help="Override the number of K-Fold splits. Must be at least 2.",
-    )
-    parser.add_argument(
-        "--base-channels",
-        nargs="+",
-        type=int,
-        dest="base_channels",
-        help="Override diffusion UNet base channel widths.",
-    )
-    parser.add_argument(
-        "--latent-dims",
-        nargs="+",
-        type=int,
-        dest="base_channels",
-        help="Deprecated alias for --base-channels. Values are mapped internally to diffusion base channels.",
-    )
-    parser.add_argument(
-        "--diffusion-timesteps",
-        type=int,
-        help="Override the number of diffusion timesteps used for training and sampling.",
-    )
-    parser.add_argument(
-        "--diffusion-log-interval",
-        type=int,
-        help="Override the batch interval for diffusion progress logging.",
-    )
-    parser.add_argument(
-        "--diffusion-val-fraction",
-        type=float,
-        help="Override the holdout validation fraction used for diffusion.",
-    )
-    args = parser.parse_args()
-    if args.n_splits is not None and args.n_splits < 2:
-        parser.error("--n-splits must be at least 2")
-    if args.diffusion_val_fraction is not None and not 0.0 < args.diffusion_val_fraction < 1.0:
-        parser.error("--diffusion-val-fraction must be between 0 and 1")
-    return args
-
-def get_dataset(dataset_name: str = "mnist", train: bool = True) -> datasets.VisionDataset:
-    """
-    Fetches the requested dataset, leveraging caching to avoid redundant downloads/loading.
-    """
-    dataset_key = dataset_name.lower()
-    dataset_classes: dict[str, type[datasets.VisionDataset]] = {
-        "mnist": datasets.MNIST,
-        "fashion": datasets.FashionMNIST,
-        # Future datasets can be added here
-    }
-    if dataset_key not in dataset_classes:
-        raise ValueError(f"Unsupported dataset_name: {dataset_name}")
-
-    cache_key = (dataset_key, train)
-    if cache_key not in DATASET_CACHE:
-        DATASET_CACHE[cache_key] = dataset_classes[dataset_key](
-            root=CONFIG.data_dir,
-            train=train,
-            download=True,
-            transform=transforms.ToTensor(),
-        )
-    return DATASET_CACHE[cache_key]
-
-def create_loader(dataset: Dataset, shuffle: bool) -> DataLoader:
-    """Centralized dataloader configuration."""
-    return DataLoader(
-        dataset,
-        batch_size=CONFIG.batch_size,
-        shuffle=shuffle,
-        num_workers=CONFIG.num_workers,
-        pin_memory=torch.cuda.is_available(),
-    )
-
-
-def build_experiment_splits(dataset_size: int, model_type: str) -> list[tuple[int, np.ndarray, np.ndarray]]:
-    """Return CV folds for reconstruction models."""
-    splitter = KFold(
-        n_splits=CONFIG.n_splits,
-        shuffle=True,
-        random_state=CONFIG.random_seed,
-    )
-    return [
-        (fold_idx, train_indices, val_indices)
-        for fold_idx, (train_indices, val_indices) in enumerate(splitter.split(range(dataset_size)), start=1)
-    ]
-
-def compute_psnr(mse: float) -> float:
-    """
-    Compute Peak Signal-to-Noise Ratio (PSNR).
-    Higher is generally better, meaning lower reconstruction error.
-    """
-    mse = max(mse, 1e-12)
-    return 10.0 * math.log10(1.0 / mse)
-
-
-def is_finite_metric(value: float) -> bool:
-    """Guard plotting/reporting paths that should skip undefined metrics."""
-    return math.isfinite(value)
-
-
-def format_metric(value: float, precision: int = 4) -> str:
-    """Render undefined metrics as N/A so diffusion reporting stays explicit."""
-    if not is_finite_metric(value):
-        return "N/A"
-    return f"{value:.{precision}f}"
-
-
-def format_capacity_label(model_type: str, capacity: int) -> str:
-    """Render model capacity using the right term for each architecture."""
-    if is_diffusion(model_type):
-        return f"Base Channels={capacity}"
-    return f"Latent={capacity}"
-
-
-def build_diffusion_metrics(noise_prediction_mse: float) -> dict[str, float]:
-    """Diffusion validation tracks noise-prediction MSE, not image reconstruction metrics."""
-    return {
-        "mse": noise_prediction_mse,
-        "psnr": float("nan"),
-        "ssim": float("nan"),
-    }
-
-
-def mean_metric(values: list[float]) -> float:
-    """Average only defined values so diffusion can skip unsupported metrics cleanly."""
-    finite_values = [value for value in values if is_finite_metric(value)]
-    if not finite_values:
-        return float("nan")
-    return float(np.mean(finite_values))
-
-
 def inject_noise(clean_images: torch.Tensor, noise_level: float) -> torch.Tensor:
-    """
-    Injects random Gaussian noise into the images to simulate noisy inputs
-    for the Denoising Autoencoder (DAE).
-    """
-    noise = noise_level * torch.randn_like(clean_images)
-    # Clamp to ensure image pixels remain in the valid range [0, 1]
-    noisy_images = torch.clamp(clean_images + noise, 0.0, 1.0)
-    return noisy_images
+    noisy_images = clean_images + noise_level * torch.randn_like(clean_images)
+    return torch.clamp(noisy_images, 0.0, 1.0)
 
 
 def compute_vae_loss(
@@ -435,31 +604,15 @@ def compute_vae_loss(
     logvar: torch.Tensor,
     criterion: nn.Module,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Variational Autoencoder loss consists of two parts:
-    
-    1. Reconstruction Loss (Binary Cross Entropy - BCE):
-       - Measures how well the decoder recreates the original image from the latent vector.
-       - BCE is used here interpreting pixels as probabilities (since they are in [0,1] for MNIST).
-    
-    2. KL Divergence:
-       - Measures how much the learned latent distribution diverges from a standard normal distribution.
-       - It acts as a regularizer, forcing the latent space to be continuous and well-structured,
-         which enables generating new samples by sampling from N(0, 1).
-         
-    Both are needed to ensure the latent space is well behaved while retaining fidelity.
-    """
-    del criterion # Not used for VAE, we use BCE directly
+    del criterion
     batch_size = clean_images.shape[0]
-    
     recon_loss = nn.functional.binary_cross_entropy(
-        reconstructed_images, clean_images, reduction="sum"
+        reconstructed_images,
+        clean_images,
+        reduction="sum",
     ) / batch_size
-    
     kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-    
-    total_loss = recon_loss + kl_loss
-    return total_loss, recon_loss
+    return recon_loss + kl_loss, recon_loss
 
 
 def run_forward_pass(
@@ -469,10 +622,6 @@ def run_forward_pass(
     criterion: nn.Module,
     model_type: str,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    """
-    Shared forward pass for both training and evaluation loops.
-    Handles routing based on the extensible 'model_type'.
-    """
     if is_vae_model(model_type):
         reconstructed_images, mu, logvar = model(inputs)
         loss, _ = compute_vae_loss(reconstructed_images, clean_images, mu, logvar, criterion)
@@ -480,15 +629,9 @@ def run_forward_pass(
         reconstructed_images = model(inputs)
         loss = criterion(reconstructed_images, clean_images)
     else:
-        # Easy to extend for future models (e.g., "diffusion")
-        raise NotImplementedError(f"Forward pass for {model_type} not implemented yet.")
-        
+        raise NotImplementedError(f"Forward pass for {model_type} not implemented.")
     return loss, reconstructed_images
 
-
-# ==============================================================================
-# 4. TRAINING & EVALUATION
-# ==============================================================================
 
 def train_epoch(
     model: nn.Module,
@@ -496,34 +639,23 @@ def train_epoch(
     optimizer: Adam,
     criterion: nn.Module,
     device: torch.device,
-    model_type: str = "ae",
-    noise_level: float = 0.2,
+    *,
+    model_type: str,
+    noise_level: float,
 ) -> float:
-    """
-    Runs a single training epoch across all batches in the data loader.
-    """
     model.train()
     running_loss = 0.0
 
     for clean_images, _ in loader:
         clean_images = clean_images.to(device, non_blocking=True)
-        
-        # Define model inputs (clean or noisy)
-        inputs = clean_images
-        if is_denoising(model_type):
-            inputs = inject_noise(clean_images, noise_level)
-
+        inputs = inject_noise(clean_images, noise_level) if is_denoising(model_type) else clean_images
         optimizer.zero_grad(set_to_none=True)
-        
-        # Shared forward logic
         loss, _ = run_forward_pass(model, inputs, clean_images, criterion, model_type)
-        
         loss.backward()
         optimizer.step()
-
         running_loss += loss.item()
 
-    return running_loss / len(loader)
+    return running_loss / max(len(loader), 1)
 
 
 def eval_epoch(
@@ -531,27 +663,20 @@ def eval_epoch(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-    model_type: str = "ae",
-    noise_level: float = 0.2,
+    *,
+    model_type: str,
+    noise_level: float,
 ) -> float:
-    """
-    Evaluates the model on the validation dataset (no gradients).
-    """
     model.eval()
     running_loss = 0.0
-
     with torch.no_grad():
         for clean_images, _ in loader:
             clean_images = clean_images.to(device, non_blocking=True)
-            
-            inputs = clean_images
-            if is_denoising(model_type):
-                inputs = inject_noise(clean_images, noise_level)
-            
+            inputs = inject_noise(clean_images, noise_level) if is_denoising(model_type) else clean_images
             loss, _ = run_forward_pass(model, inputs, clean_images, criterion, model_type)
             running_loss += loss.item()
 
-    return running_loss / len(loader)
+    return running_loss / max(len(loader), 1)
 
 
 def evaluate_metrics(
@@ -559,16 +684,13 @@ def evaluate_metrics(
     loader: DataLoader,
     criterion: nn.Module,
     device: torch.device,
-    model_type: str = "ae",
+    *,
+    model_type: str,
 ) -> dict[str, float]:
-    """
-    Computes rigorous evaluation metrics (MSE, PSNR, SSIM) for final validation.
-    """
     model.eval()
     mse_total = 0.0
     ssim_total = 0.0
     num_batches = 0
-    # Structural Similarity Index Measure: compares image structural differences
     ssim_metric = None
     if StructuralSimilarityIndexMeasure is not None:
         ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
@@ -576,14 +698,13 @@ def evaluate_metrics(
     with torch.no_grad():
         for clean_images, _ in loader:
             clean_images = clean_images.to(device, non_blocking=True)
-            
             if is_vae_model(model_type):
                 reconstructed_images = model.reconstruct(clean_images)
             elif model_type in ("ae", "dae"):
                 reconstructed_images = model(clean_images)
             else:
-                raise NotImplementedError(f"Metrics not supported for {model_type}")
-                
+                raise NotImplementedError(f"Metrics not supported for {model_type}.")
+
             mse_total += criterion(reconstructed_images, clean_images).item()
             if ssim_metric is not None:
                 ssim_total += ssim_metric(reconstructed_images, clean_images).item()
@@ -592,46 +713,140 @@ def evaluate_metrics(
                 ssim_total += _compute_batch_ssim(reconstructed_images, clean_images)
             num_batches += 1
 
-    mse = mse_total / num_batches
+    mse = mse_total / max(num_batches, 1)
     return {
         "mse": mse,
         "psnr": compute_psnr(mse),
-        "ssim": ssim_total / num_batches,
+        "ssim": ssim_total / max(num_batches, 1),
     }
 
-# ==============================================================================
-# 5. VISUALIZATION
-# ==============================================================================
+
+def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> torch.Tensor:
+    display_images = images.detach().cpu().float()
+    if rescale:
+        flat = display_images.reshape(display_images.shape[0], -1)
+        mins = flat.min(dim=1).values.view(-1, 1, 1, 1)
+        maxs = flat.max(dim=1).values.view(-1, 1, 1, 1)
+        display_images = (display_images - mins) / (maxs - mins).clamp_min(1e-8)
+    return display_images.clamp(0.0, 1.0)
+
+
+def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
+    num_images = images.shape[0]
+    figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
+    axes = np.atleast_1d(axes)
+    for axis, image in zip(axes, images):
+        axis.imshow(image.squeeze(), cmap="gray")
+        axis.axis("off")
+    figure.suptitle(title)
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_image_grid(images: torch.Tensor, save_path: Path, title: str, *, num_cols: int = 5) -> None:
+    images = prepare_display_images(images)
+    num_images = images.shape[0]
+    num_cols = max(1, min(num_cols, num_images))
+    num_rows = math.ceil(num_images / num_cols)
+    figure, axes = plt.subplots(num_rows, num_cols, figsize=(1.8 * num_cols, 1.8 * num_rows))
+    axes_array = np.atleast_1d(axes).reshape(num_rows, num_cols)
+
+    for image_idx in range(num_rows * num_cols):
+        axis = axes_array.flat[image_idx]
+        axis.axis("off")
+        if image_idx < num_images:
+            axis.imshow(images[image_idx].squeeze(), cmap="gray")
+
+    figure.suptitle(title)
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_loss_curves(
+    train_losses: list[float],
+    val_losses: list[float],
+    save_path: Path,
+    *,
+    title: str | None = None,
+    y_label: str = "Loss",
+) -> None:
+    epochs = np.arange(1, len(train_losses) + 1)
+    figure, axis = plt.subplots(figsize=(8, 5))
+    axis.plot(epochs, train_losses, marker="o", linewidth=2.0, markersize=5, label="Train Loss")
+    axis.plot(epochs, val_losses, marker="s", linewidth=2.0, markersize=5, label="Validation Loss")
+    if title is not None:
+        axis.set_title(title)
+    axis.set_xlabel("Epoch")
+    axis.set_ylabel(y_label)
+    axis.legend()
+    axis.grid(True, alpha=0.3)
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_latent_space(model: nn.Module, loader: DataLoader, device: torch.device, save_path: Path) -> None:
+    model.eval()
+    latent_vectors: list[np.ndarray] = []
+    labels_list: list[np.ndarray] = []
+
+    with torch.no_grad():
+        for clean_images, labels in loader:
+            clean_images = clean_images.to(device, non_blocking=True)
+            latent_vectors.append(model.encode(clean_images).cpu().numpy())
+            labels_list.append(labels.numpy())
+
+    all_latent = np.concatenate(latent_vectors, axis=0)
+    all_labels = np.concatenate(labels_list, axis=0)
+    reduced = PCA(n_components=2).fit_transform(all_latent)
+
+    figure, axis = plt.subplots(figsize=(8, 6))
+    scatter = axis.scatter(
+        reduced[:, 0],
+        reduced[:, 1],
+        c=all_labels,
+        cmap="tab10",
+        s=10,
+        alpha=0.75,
+    )
+    axis.set_title("Latent Space Representation")
+    axis.set_xlabel("PCA 1")
+    axis.set_ylabel("PCA 2")
+    figure.colorbar(scatter, ax=axis, label="Digit")
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
 
 def show_reconstructions(
     model: nn.Module,
     loader: DataLoader,
     device: torch.device,
     save_path: Path,
-    model_type: str = "ae",
-    noise_level: float = 0.2,
+    *,
+    model_type: str,
+    noise_level: float,
 ) -> None:
-    """Visualize original vs (optionally noisy) vs reconstructed images."""
     model.eval()
     clean_images, _ = next(iter(loader))
     num_images = min(10, clean_images.shape[0])
     clean_images = clean_images[:num_images].to(device)
 
     inputs = clean_images
+    noisy_images = None
     if is_denoising(model_type):
         noisy_images = inject_noise(clean_images, noise_level)
         inputs = noisy_images
 
     with torch.no_grad():
-        if is_vae_model(model_type):
-            reconstructed_images = model.reconstruct(inputs)
-        else:
-            reconstructed_images = model(inputs)
+        reconstructed_images = model.reconstruct(inputs) if is_vae_model(model_type) else model(inputs)
 
     clean_images = clean_images.cpu()
     reconstructed_images = reconstructed_images.cpu()
 
-    if is_denoising(model_type):
+    if noisy_images is not None:
         noisy_images = noisy_images.cpu()
         figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4), squeeze=False)
         for i in range(num_images):
@@ -657,76 +872,30 @@ def show_reconstructions(
     figure.savefig(save_path, dpi=200, bbox_inches="tight")
     plt.close(figure)
 
-def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
-    """Helper method to plot a simple 1D row of images."""
-    num_images = images.shape[0]
-    figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
-    if num_images == 1:
-        axes = [axes]
-    for axis, image in zip(axes, images):
-        axis.imshow(image.squeeze(), cmap="gray")
-        axis.axis("off")
-    figure.suptitle(title)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_image_grid(
-    images: torch.Tensor,
-    save_path: Path,
-    title: str,
-    num_cols: int = 5,
-) -> None:
-    """Save a compact grid of generated images for unconditional samplers."""
-    images = prepare_display_images(images)
-    num_images = images.shape[0]
-    num_cols = max(1, min(num_cols, num_images))
-    num_rows = math.ceil(num_images / num_cols)
-    figure, axes = plt.subplots(num_rows, num_cols, figsize=(1.8 * num_cols, 1.8 * num_rows))
-    axes_array = np.atleast_1d(axes).reshape(num_rows, num_cols)
-
-    for image_idx in range(num_rows * num_cols):
-        axis = axes_array.flat[image_idx]
-        axis.axis("off")
-        if image_idx < num_images:
-            axis.imshow(images[image_idx].squeeze(), cmap="gray")
-
-    figure.suptitle(title)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
 
 def generate_samples(
     model: nn.Module,
     latent_dim: int,
     device: torch.device,
-    num_samples: int = 10,
-    save_path: Path | None = None,
+    *,
+    save_path: Path,
+    num_samples: int,
 ) -> None:
-    """Generates new images for generative models (like VAE) from pure noise."""
-    if save_path is None:
-        raise ValueError("generate_samples requires save_path.")
-
     model.eval()
     with torch.no_grad():
         z = torch.randn(num_samples, latent_dim, device=device)
         generated = model.decoder(z).view(-1, 1, 28, 28).cpu()
-
     plot_image_row(generated, save_path, title="VAE Generated Samples")
+
 
 def interpolate_images(
     model: nn.Module,
     loader: DataLoader,
     device: torch.device,
+    *,
+    save_path: Path,
     steps: int = 10,
-    save_path: Path | None = None,
 ) -> None:
-    """Interpolates between two images smoothly in the model's latent space."""
-    if save_path is None:
-        raise ValueError("interpolate_images requires save_path.")
-
     model.eval()
     image_batch: list[torch.Tensor] = []
     for clean_images, _ in loader:
@@ -755,13 +924,13 @@ def plot_diffusion_snapshots(
     model: nn.Module,
     scheduler: object,
     device: torch.device,
+    *,
     dataset_name: str,
     base_channels: int,
     save_path: Path,
-    num_samples: int = 8,
+    num_samples: int,
     num_snapshots: int = 9,
 ) -> None:
-    """Generates a progression visual of the diffusion reverse process."""
     _, intermediate_images, intermediate_steps = sample_images(
         model,
         scheduler,
@@ -771,29 +940,21 @@ def plot_diffusion_snapshots(
         num_snapshots=num_snapshots,
     )
 
-    num_snapshots = len(intermediate_images)
     figure, axes = plt.subplots(
-        num_snapshots,
+        len(intermediate_images),
         num_samples,
-        figsize=(1.55 * num_samples, 1.55 * num_snapshots),
+        figsize=(1.55 * num_samples, 1.55 * len(intermediate_images)),
         squeeze=False,
     )
 
     for row_idx, (images, step_num) in enumerate(zip(intermediate_images, intermediate_steps)):
         display_images = prepare_display_images(images, rescale=True)
         for col_idx in range(num_samples):
-            ax = axes[row_idx, col_idx]
-            ax.imshow(display_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
-            ax.axis("off")
+            axis = axes[row_idx, col_idx]
+            axis.imshow(display_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
+            axis.axis("off")
             if col_idx == 0:
-                ax.set_ylabel(
-                    f"t={step_num}",
-                    rotation=0,
-                    labelpad=24,
-                    va="center",
-                    fontsize=9,
-                    fontweight="bold",
-                )
+                axis.set_ylabel(f"t={step_num}", rotation=0, labelpad=24, va="center", fontsize=9, fontweight="bold")
 
     figure.suptitle(
         f"Reverse Diffusion Process (Noise -> Image)\n"
@@ -805,615 +966,392 @@ def plot_diffusion_snapshots(
     plt.close(figure)
 
 
-def plot_latent_space(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-    save_path: Path,
-) -> None:
-    """Reduces the latent space into 2D via PCA to visualize clustering by class labels."""
-    model.eval()
-    latent_vectors: list[np.ndarray] = []
-    labels_list: list[np.ndarray] = []
+def instantiate_model(config: ExperimentConfig, device: torch.device) -> tuple[nn.Module, Any | None]:
+    scheduler = None
+    if is_vae_model(config.model):
+        model = VariationalAutoencoder(latent_dim=config.latent_dim).to(device)
+    elif config.model in ("ae", "dae"):
+        model = FullyConnectedAutoencoder(latent_dim=config.latent_dim).to(device)
+    elif is_diffusion(config.model):
+        model = DiffusionUNet(base_channels=config.base_channels, time_dim=config.time_dim).to(device)
+        scheduler = get_noise_schedule(
+            config.timesteps,
+            device,
+            beta_start=config.beta_start,
+            beta_end=config.beta_end,
+        )
+    else:
+        raise NotImplementedError(f"Unsupported model: {config.model}")
+    return model, scheduler
 
-    with torch.no_grad():
-        for clean_images, labels in loader:
-            clean_images = clean_images.to(device, non_blocking=True)
-            latent = model.encode(clean_images).cpu().numpy()
-            latent_vectors.append(latent)
-            labels_list.append(labels.numpy())
 
-    all_latent = np.concatenate(latent_vectors, axis=0)
-    all_labels = np.concatenate(labels_list, axis=0)
-    reduced = PCA(n_components=2).fit_transform(all_latent)
-
-    figure, axis = plt.subplots(figsize=(8, 6))
-    scatter = axis.scatter(
-        reduced[:, 0],
-        reduced[:, 1],
-        c=all_labels,
-        cmap="tab10",
-        s=10,
-        alpha=0.75,
+def log_run_header(config: ExperimentConfig, run_paths: dict[str, Path], device: torch.device, cli_args: list[str]) -> None:
+    cuda_name = torch.cuda.get_device_name(device) if device.type == "cuda" else "CPU"
+    data_dir = Path(config.data_dir)
+    LOGGER.info("Start time: %s", datetime.now().isoformat())
+    LOGGER.info("Hostname: %s", socket.gethostname())
+    LOGGER.info("Device: %s (%s)", device, cuda_name)
+    LOGGER.info("Seed: %s", config.seed)
+    LOGGER.info("CLI args: %s", " ".join(cli_args) if cli_args else "<none>")
+    LOGGER.info("Resolved output directory: %s", run_paths["root"].resolve())
+    LOGGER.info("Data directory: %s", data_dir.resolve())
+    LOGGER.info("Download enabled: %s", config.download)
+    LOGGER.info(
+        "Run config: dataset=%s model=%s epochs=%d batch_size=%d lr=%g num_workers=%d",
+        config.dataset,
+        config.model,
+        config.epochs,
+        config.batch_size,
+        config.lr,
+        config.num_workers,
     )
-    axis.set_title("Latent Space Representation")
-    axis.set_xlabel("PCA 1")
-    axis.set_ylabel("PCA 2")
-    figure.colorbar(scatter, ax=axis, label="Digit")
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
+    if is_diffusion(config.model):
+        LOGGER.info(
+            "Model hyperparameters: base_channels=%d time_dim=%d timesteps=%d beta_start=%g beta_end=%g sample_count=%d",
+            config.base_channels,
+            config.time_dim,
+            config.timesteps,
+            config.beta_start,
+            config.beta_end,
+            config.sample_count,
+        )
+    else:
+        LOGGER.info(
+            "Model hyperparameters: latent_dim=%d dae_noise_level=%g n_splits=%d",
+            config.latent_dim,
+            config.dae_noise_level,
+            config.n_splits,
+        )
 
 
-def plot_loss_curves(
-    train_losses: list[float],
-    val_losses: list[float],
-    save_path: Path,
-    title: str | None = None,
-    y_label: str = "Loss",
-) -> None:
-    """Plots training vs validation loss curves across epochs."""
-    epochs = np.arange(1, len(train_losses) + 1)
-    figure, axis = plt.subplots(figsize=(8, 5))
-    axis.plot(epochs, train_losses, marker="o", linewidth=2.0, markersize=5, label="Train Loss")
-    axis.plot(epochs, val_losses, marker="s", linewidth=2.0, markersize=5, label="Validation Loss")
-    if title is not None:
-        axis.set_title(title)
-    axis.set_xlabel("Epoch")
-    axis.set_ylabel(y_label)
-    axis.legend()
-    axis.grid(True, alpha=0.3)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_results(results_dict: dict[int, dict[str, float]], save_path: Path) -> None:
-    """Plots final results (Mean Valid MSE vs Latent Dim)."""
-    latent_dims = sorted(results_dict)
-    mean_losses = [results_dict[dim]["mean_loss"] for dim in latent_dims]
-    std_losses = [results_dict[dim]["std_loss"] for dim in latent_dims]
-
-    figure, axis = plt.subplots(figsize=(8, 5))
-    axis.errorbar(
-        latent_dims,
-        mean_losses,
-        yerr=std_losses,
-        marker="o",
-        linestyle="-",
-        capsize=5,
+def save_checkpoint(path: Path, model: nn.Module, config: ExperimentConfig, metrics: dict[str, Any]) -> None:
+    torch.save(
+        {
+            "model_state_dict": model.state_dict(),
+            "config": json_ready(asdict(config)),
+            "metrics": json_ready(metrics),
+        },
+        path,
     )
-    axis.set_title("Compression vs Reconstruction Error")
-    axis.set_xlabel("Latent Dimension")
-    axis.set_ylabel("Mean Validation MSE")
-    axis.grid(True, alpha=0.3)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
 
 
-def plot_model_metric_comparison(
-    rows: list[dict[str, float | int | str]],
-    dataset_name: str,
-    capacity: int,
-    save_path: Path,
-) -> None:
-    """Compares different models on key metrics (MSE, PSNR, SSIM) for a single latent dimension."""
-    figure, axes = plt.subplots(1, 3, figsize=(13, 4))
-    metric_specs = [
-        ("Mean MSE", "mean_loss", "tab:red"),
-        ("PSNR", "psnr", "tab:blue"),
-        ("SSIM", "ssim", "tab:green"),
-    ]
-
-    for axis, (title, metric_key, color) in zip(axes, metric_specs):
-        metric_rows = [
-            row for row in rows
-            if is_finite_metric(float(row[metric_key]))
-        ]
-        if not metric_rows:
-            axis.set_title(title)
-            axis.text(0.5, 0.5, "N/A", ha="center", va="center", fontsize=12)
-            axis.set_xticks([])
-            axis.set_yticks([])
-            continue
-
-        model_labels = [str(row["model_type"]).upper() for row in metric_rows]
-        values = [float(row[metric_key]) for row in metric_rows]
-        x = np.arange(len(metric_rows))
-        axis.bar(x, values, color=color, alpha=0.85)
-        axis.set_title(title)
-        axis.set_xticks(x, model_labels)
-        axis.grid(True, axis="y", alpha=0.25)
-
-    figure.suptitle(f"{dataset_name.upper()} Model Comparison (Capacity = {capacity})")
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_metrics_vs_latent_by_model(
-    rows: list[dict[str, float | int | str]],
-    dataset_name: str,
-    save_path: Path,
-) -> None:
-    """Plots metrics (MSE, PSNR, SSIM) vs Latent Dimension, grouped by model type."""
-    metrics = [
-        ("mean_loss", "Mean MSE"),
-        ("psnr", "PSNR"),
-        ("ssim", "SSIM"),
-    ]
-    model_styles = {
-        "ae": ("AE", "tab:blue"),
-        "dae": ("DAE", "tab:orange"),
-        "vae": ("VAE", "tab:green"),
-        "diffusion": ("Diffusion", "tab:purple"),
-    }
-
-    figure, axes = plt.subplots(1, 3, figsize=(15, 4.5))
-
-    for axis, (metric_key, metric_label) in zip(axes, metrics):
-        metric_has_values = False
-        for model_key, (model_label, color) in model_styles.items():
-            model_rows = [row for row in rows if str(row["model_type"]) == model_key]
-            model_rows.sort(key=lambda row: int(row["latent_dim"]))
-            if not model_rows:
-                continue
-
-            filtered_rows = [
-                row for row in model_rows
-                if is_finite_metric(float(row[metric_key]))
-            ]
-            if not filtered_rows:
-                continue
-
-            latent_dims = [int(row["latent_dim"]) for row in filtered_rows]
-            metric_values = [float(row[metric_key]) for row in filtered_rows]
-            axis.plot(
-                latent_dims,
-                metric_values,
-                marker="o",
-                linewidth=2,
-                label=model_label,
-                color=color,
-            )
-            metric_has_values = True
-
-        axis.set_title(f"{metric_label} vs Model Capacity")
-        axis.set_xlabel("Model Capacity")
-        axis.set_ylabel(metric_label)
-        axis.set_xticks(sorted({int(row["latent_dim"]) for row in rows}))
-        axis.grid(True, alpha=0.3)
-        if not metric_has_values:
-            axis.text(0.5, 0.5, "N/A", ha="center", va="center", transform=axis.transAxes, fontsize=12)
-
-    axes[0].legend()
-    figure.suptitle(f"{dataset_name.upper()} Metrics by Model Capacity")
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def save_results_csv(results: list[dict[str, float | int | str]], save_path: Path) -> None:
-    """Saves raw evaluation metrics to a CSV for external analysis or presentation tables."""
-    with save_path.open("w", newline="", encoding="utf-8") as csv_file:
+def save_run_summary_csv(path: Path, summary: dict[str, Any]) -> None:
+    with path.open("w", newline="", encoding="utf-8") as csv_file:
         writer = csv.writer(csv_file)
+        writer.writerow(["dataset", "model", "mean_loss", "std_loss", "psnr", "ssim", "parameters", "seed"])
         writer.writerow(
             [
-                "dataset_name",
-                "model_type",
-                "latent_dim",
-                "mean_loss",
-                "std_loss",
-                "mean_psnr",
-                "mean_ssim",
+                summary["dataset"],
+                summary["model"],
+                summary["mean_loss"],
+                summary["std_loss"],
+                summary["psnr"],
+                summary["ssim"],
+                summary["model_parameters"],
+                summary["seed"],
             ]
         )
-        for row in results:
-            writer.writerow(
-                [
-                    row["dataset_name"],
-                    row["model_type"],
-                    row["latent_dim"],
-                    row["mean_loss"],
-                    row["std_loss"],
-                    row["psnr"],
-                    row["ssim"],
-                ]
-            )
 
 
-# ==============================================================================
-# 6. EXPERIMENT LOGIC
-# ==============================================================================
+def count_trainable_parameters(model: nn.Module) -> int:
+    return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
 
-def run_kfold_experiment(
-    latent_dim: int,
-    dataset_name: str = "mnist",
-    model_type: str = "ae",
-    noise_level: float = 0.2,
-) -> dict[str, object]:
-    """
-    Runs a full K-Fold cross validation for a specific configuration.
-    Returns metrics and best fold's parameters.
-    """
-    noise_text = f" | noise={noise_level:g}" if is_denoising(model_type) else ""
-    log_prefix = f"[{dataset_name.upper()} | {model_type.upper()}{noise_text}]"
-    capacity_label = format_capacity_label(model_type, latent_dim)
-    split_label = "Split" if is_diffusion(model_type) else "Fold"
+
+def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device: torch.device) -> Path:
+    timestamp = datetime.now()
+    run_paths = resolve_run_dir(config, timestamp=timestamp)
+    setup_logging(run_paths["root"])
+    seed_everything(config.seed)
+    config_path = save_config(config, run_paths["root"], cli_args=cli_args, resolved_paths=run_paths)
+    metrics_jsonl_path = run_paths["root"] / "metrics.jsonl"
+
+    log_run_header(config, run_paths, device, cli_args)
+    LOGGER.info("Saved resolved config to %s", config_path.resolve())
+
+    noise_level = config.dae_noise_level if is_denoising(config.model) else 0.0
 
     fold_metrics: list[dict[str, float]] = []
-    best_fold_payload: dict[str, object] | None = None
+    best_payload: dict[str, Any] | None = None
+    best_model_state: dict[str, torch.Tensor] | None = None
 
-    if is_diffusion(model_type):
-        train_dataset = get_dataset(dataset_name=dataset_name, train=True)
-        test_dataset = get_dataset(dataset_name=dataset_name, train=False)
-        train_loader = create_loader(train_dataset, shuffle=True)
-        eval_loader = create_loader(test_dataset, shuffle=False)
-        experiment_splits = [(1, train_loader, eval_loader)]
-
-        print(f"{log_prefix} {capacity_label} | Train dataset size: {len(train_dataset)}")
-        print(f"{log_prefix} {capacity_label} | Test dataset size: {len(test_dataset)}")
-        print(f"{log_prefix} {capacity_label} | Train batches: {len(train_loader)}")
-        print(f"{log_prefix} {capacity_label} | Test batches: {len(eval_loader)}")
+    if is_diffusion(config.model):
+        train_dataset = get_dataset(config, config.dataset, train=True)
+        eval_dataset = get_dataset(config, config.dataset, train=False)
+        train_loader = create_loader(train_dataset, config, shuffle=True)
+        eval_loader = create_loader(eval_dataset, config, shuffle=False)
+        LOGGER.info("Dataset sizes: train=%d test=%d", len(train_dataset), len(eval_dataset))
+        LOGGER.info("Batch counts: train=%d test=%d", len(train_loader), len(eval_loader))
+        experiment_splits: list[tuple[int, DataLoader, DataLoader, list[int]]] = [
+            (1, train_loader, eval_loader, list(range(len(eval_dataset))))
+        ]
     else:
-        dataset = get_dataset(dataset_name=dataset_name, train=True)
+        dataset = get_dataset(config, config.dataset, train=True)
+        LOGGER.info("Dataset size: train=%d", len(dataset))
         experiment_splits = []
-        for fold_idx, train_indices, val_indices in build_experiment_splits(len(dataset), model_type):
+        for fold_idx, train_indices, val_indices in build_experiment_splits(len(dataset), config):
             train_subset = Subset(dataset, train_indices.tolist())
             val_subset = Subset(dataset, val_indices.tolist())
-            train_loader = create_loader(train_subset, shuffle=True)
-            eval_loader = create_loader(val_subset, shuffle=False)
-            experiment_splits.append((fold_idx, train_loader, eval_loader, train_indices, val_indices))
+            train_loader = create_loader(train_subset, config, shuffle=True)
+            eval_loader = create_loader(val_subset, config, shuffle=False)
+            experiment_splits.append((fold_idx, train_loader, eval_loader, val_indices.tolist()))
+            LOGGER.info(
+                "Fold %d sizes: train=%d val=%d | batches train=%d val=%d",
+                fold_idx,
+                len(train_subset),
+                len(val_subset),
+                len(train_loader),
+                len(eval_loader),
+            )
 
-    for split_entry in experiment_splits:
-        if is_diffusion(model_type):
-            fold_idx, train_loader, eval_loader = split_entry
-            val_indices = np.arange(len(eval_loader.dataset))
-        else:
-            fold_idx, train_loader, eval_loader, _, val_indices = split_entry
-
-        # Extensible instantiator
-        scheduler = None
-        if is_vae_model(model_type):
-            model_class = VariationalAutoencoder
-            model = model_class(latent_dim=latent_dim).to(DEVICE)
-        elif model_type in ("ae", "dae"):
-            model_class = FullyConnectedAutoencoder
-            model = model_class(latent_dim=latent_dim).to(DEVICE)
-        elif model_type == "diffusion":
-            # Diffusion reuses the experiment loop, but the model predicts added noise
-            # rather than reconstructing the input image directly.
-            model = DiffusionUNet(base_channels=latent_dim).to(DEVICE)
-            scheduler = get_noise_schedule(CONFIG.diffusion_timesteps, DEVICE)
-        else:
-            raise NotImplementedError(f"Model initialization for {model_type} not implemented")
-            
-        optimizer = Adam(model.parameters(), lr=CONFIG.learning_rate)
-
+    for fold_idx, train_loader, eval_loader, val_indices in experiment_splits:
+        model, scheduler = instantiate_model(config, device)
+        model_parameter_count = count_trainable_parameters(model)
+        if fold_idx == 1:
+            LOGGER.info("Trainable parameters: %d", model_parameter_count)
+        optimizer = Adam(model.parameters(), lr=config.lr)
         train_losses: list[float] = []
         val_losses: list[float] = []
 
-        for epoch in range(1, CONFIG.epochs + 1):
-            if is_diffusion(model_type):
+        for epoch in range(1, config.epochs + 1):
+            if is_diffusion(config.model):
                 train_loss = train_diffusion_epoch(
                     model,
                     train_loader,
                     optimizer,
                     scheduler,
-                    DEVICE,
-                    progress_label=f"{log_prefix} {capacity_label} | {split_label} {fold_idx}",
-                    progress_interval=CONFIG.diffusion_log_interval,
+                    device,
+                    progress_label=f"[{config.dataset.upper()} | {config.model.upper()} | Fold {fold_idx}]",
+                    progress_interval=config.diffusion_log_interval,
                 )
                 val_loss = eval_diffusion_epoch(
                     model,
                     eval_loader,
                     scheduler,
-                    DEVICE,
-                    progress_label=f"{log_prefix} {capacity_label} | {split_label} {fold_idx}",
-                    progress_interval=CONFIG.diffusion_log_interval,
+                    device,
+                    progress_label=f"[{config.dataset.upper()} | {config.model.upper()} | Fold {fold_idx}]",
+                    progress_interval=config.diffusion_log_interval,
                     eval_split_name="Test",
                 )
+                split_name = "test_loss"
             else:
                 train_loss = train_epoch(
                     model,
                     train_loader,
                     optimizer,
                     CRITERION,
-                    DEVICE,
-                    model_type=model_type,
+                    device,
+                    model_type=config.model,
                     noise_level=noise_level,
                 )
                 val_loss = eval_epoch(
                     model,
                     eval_loader,
                     CRITERION,
-                    DEVICE,
-                    model_type=model_type,
+                    device,
+                    model_type=config.model,
                     noise_level=noise_level,
                 )
+                split_name = "val_loss"
+
             train_losses.append(train_loss)
             val_losses.append(val_loss)
-
-            print(
-                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
-                f"Epoch {epoch}/{CONFIG.epochs} | "
-                f"Train Loss={train_loss:.6f} | {'Test' if is_diffusion(model_type) else 'Val'} Loss={val_loss:.6f}"
+            epoch_payload = {
+                "event": "epoch_end",
+                "fold": fold_idx,
+                "epoch": epoch,
+                "train_loss": train_loss,
+                split_name: val_loss,
+            }
+            append_metrics_jsonl(metrics_jsonl_path, epoch_payload)
+            LOGGER.info(
+                "Fold %d | Epoch %d/%d | Train Loss=%.6f | %s=%.6f",
+                fold_idx,
+                epoch,
+                config.epochs,
+                train_loss,
+                "Test Loss" if is_diffusion(config.model) else "Val Loss",
+                val_loss,
             )
 
-        if model_type == "diffusion":
-            metrics = evaluate_diffusion_metrics(model, eval_loader, scheduler, DEVICE)
+        if is_diffusion(config.model):
+            metrics = evaluate_diffusion_metrics(model, eval_loader, scheduler, device)
             metrics["noise_mse"] = val_losses[-1]
         else:
-            metrics = evaluate_metrics(model, eval_loader, CRITERION, DEVICE, model_type=model_type)
-            
-        fold_metrics.append(metrics)
-        if model_type == "diffusion":
-            print(
-                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
-                f"Noise MSE={metrics['noise_mse']:.6f}, Recon MSE={metrics['mse']:.6f}, "
-                f"PSNR={format_metric(metrics['psnr'])}, SSIM={format_metric(metrics['ssim'])}"
-            )
-        else:
-            print(
-                f"{log_prefix} {capacity_label} | {split_label} {fold_idx} | "
-                f"MSE={metrics['mse']:.6f}, PSNR={metrics['psnr']:.4f}, SSIM={metrics['ssim']:.4f}"
-            )
+            metrics = evaluate_metrics(model, eval_loader, CRITERION, device, model_type=config.model)
 
-        # Track the best model across folds based on Mean Squared Error
-        comparison_mse = metrics["noise_mse"] if model_type == "diffusion" else metrics["mse"]
-        best_comparison_mse = (
-            best_fold_payload["metrics"].get("noise_mse", best_fold_payload["metrics"]["mse"])
-            if best_fold_payload is not None
-            else None
+        fold_metrics.append(metrics)
+        summary_label = "Noise MSE" if is_diffusion(config.model) else "MSE"
+        summary_value = metrics["noise_mse"] if is_diffusion(config.model) else metrics["mse"]
+        LOGGER.info(
+            "Fold %d summary | %s=%.6f | PSNR=%s | SSIM=%s",
+            fold_idx,
+            summary_label,
+            summary_value,
+            format_metric(metrics["psnr"]),
+            format_metric(metrics["ssim"]),
         )
-        if best_fold_payload is None or comparison_mse < best_comparison_mse:
-            best_fold_payload = {
+
+        comparison_mse = metrics["noise_mse"] if is_diffusion(config.model) else metrics["mse"]
+        best_comparison = None if best_payload is None else (
+            best_payload["metrics"].get("noise_mse", best_payload["metrics"]["mse"])
+        )
+        if best_payload is None or comparison_mse < best_comparison:
+            best_payload = {
+                "fold": fold_idx,
                 "metrics": metrics,
-                "model_state_dict": {k: v.detach().cpu() for k, v in model.state_dict().items()},
-                "val_indices": val_indices.tolist(),
-                "uses_test_split": is_diffusion(model_type),
+                "val_indices": val_indices,
                 "train_losses": train_losses,
                 "val_losses": val_losses,
             }
+            best_model_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
+
+    if best_payload is None or best_model_state is None:
+        raise RuntimeError("Training did not produce any results.")
 
     all_losses = [entry.get("noise_mse", entry["mse"]) for entry in fold_metrics]
     all_psnr = [entry["psnr"] for entry in fold_metrics]
     all_ssim = [entry["ssim"] for entry in fold_metrics]
-    
-    mean_loss = float(np.mean(all_losses))
-    std_loss = float(np.std(all_losses))
-    mean_psnr = mean_metric(all_psnr)
-    mean_ssim = mean_metric(all_ssim)
-
-    if model_type == "diffusion":
-        print(
-            f"{log_prefix} {capacity_label} | Mean Noise Loss={mean_loss:.6f} ± {std_loss:.6f} | "
-            f"Mean PSNR={format_metric(mean_psnr)} | Mean SSIM={format_metric(mean_ssim)}"
-        )
-    else:
-        print(
-            f"{log_prefix} {capacity_label} | Mean Loss={mean_loss:.6f} ± {std_loss:.6f} | "
-            f"Mean PSNR={format_metric(mean_psnr)} | Mean SSIM={format_metric(mean_ssim)}"
-        )
-
-    return {
-        "mean_loss": mean_loss,
-        "std_loss": std_loss,
-        "psnr": mean_psnr,
-        "ssim": mean_ssim,
-        "all_losses": all_losses,
+    final_summary = {
+        "dataset": config.dataset,
+        "model": config.model,
+        "run_name": run_paths["root"].name,
+        "mean_loss": float(np.mean(all_losses)),
+        "std_loss": float(np.std(all_losses)),
+        "psnr": mean_metric(all_psnr),
+        "ssim": mean_metric(all_ssim),
+        "seed": config.seed,
+        "model_parameters": model_parameter_count,
+        "device": str(device),
+        "hostname": socket.gethostname(),
+        "run_dir": str(run_paths["root"].resolve()),
         "fold_metrics": fold_metrics,
-        "best_fold": best_fold_payload,
+        "best_fold": best_payload,
+        "artifacts": {
+            "config": str(config_path.resolve()),
+            "log": str((run_paths["root"] / "train.log").resolve()),
+            "metrics_jsonl": str(metrics_jsonl_path.resolve()),
+        },
     }
+
+    best_model, best_scheduler = instantiate_model(config, device)
+    best_model.load_state_dict(best_model_state)
+
+    checkpoint_path = run_paths["checkpoints"] / "best.pt"
+    save_checkpoint(checkpoint_path, best_model, config, final_summary)
+    final_summary["artifacts"]["checkpoint"] = str(checkpoint_path.resolve())
+
+    if is_diffusion(config.model):
+        eval_dataset = get_dataset(config, config.dataset, train=False)
+        best_eval_loader = create_loader(eval_dataset, config, shuffle=False)
+        loss_curve_path = run_paths["plots"] / "loss_curve.png"
+        plot_loss_curves(
+            best_payload["train_losses"],
+            best_payload["val_losses"],
+            loss_curve_path,
+            title=f"Diffusion Training Loss ({config.dataset.upper()}, Channels={config.base_channels})",
+            y_label="MSE Loss",
+        )
+        sample_path = run_paths["samples"] / "generated_samples.png"
+        generated_samples = sample_images(
+            best_model,
+            best_scheduler,
+            device,
+            num_samples=config.sample_count,
+        )
+        plot_image_grid(
+            generated_samples,
+            sample_path,
+            title=f"Diffusion Samples ({config.dataset.upper()}, Channels={config.base_channels})",
+        )
+        snapshot_path = run_paths["plots"] / "diffusion_snapshots.png"
+        plot_diffusion_snapshots(
+            best_model,
+            best_scheduler,
+            device,
+            dataset_name=config.dataset,
+            base_channels=config.base_channels,
+            save_path=snapshot_path,
+            num_samples=min(config.sample_count, 8),
+        )
+        final_summary["artifacts"]["plots"] = [str(loss_curve_path.resolve()), str(snapshot_path.resolve())]
+        final_summary["artifacts"]["samples"] = [str(sample_path.resolve())]
+    else:
+        dataset = get_dataset(config, config.dataset, train=True)
+        best_val_subset = Subset(dataset, best_payload["val_indices"])
+        best_val_loader = create_loader(best_val_subset, config, shuffle=False)
+        loss_curve_path = run_paths["plots"] / "loss_curve.png"
+        recon_path = run_paths["plots"] / "reconstructions.png"
+        latent_path = run_paths["plots"] / "latent_space.png"
+
+        plot_loss_curves(best_payload["train_losses"], best_payload["val_losses"], loss_curve_path)
+        show_reconstructions(
+            best_model,
+            best_val_loader,
+            device,
+            recon_path,
+            model_type=config.model,
+            noise_level=noise_level,
+        )
+        plot_latent_space(best_model, best_val_loader, device, latent_path)
+
+        artifact_plots = [str(loss_curve_path.resolve()), str(recon_path.resolve()), str(latent_path.resolve())]
+        sample_artifacts: list[str] = []
+        if is_vae_model(config.model):
+            generated_path = run_paths["samples"] / "generated_samples.png"
+            interpolation_path = run_paths["samples"] / "latent_interpolation.png"
+            generate_samples(
+                best_model,
+                config.latent_dim,
+                device,
+                save_path=generated_path,
+                num_samples=config.sample_count,
+            )
+            interpolate_images(best_model, best_val_loader, device, save_path=interpolation_path)
+            sample_artifacts.extend([str(generated_path.resolve()), str(interpolation_path.resolve())])
+
+        final_summary["artifacts"]["plots"] = artifact_plots
+        final_summary["artifacts"]["samples"] = sample_artifacts
+
+    metrics_json_path = run_paths["root"] / "metrics.json"
+    save_metrics_json(metrics_json_path, final_summary)
+    final_summary["artifacts"]["metrics_json"] = str(metrics_json_path.resolve())
+    summary_csv_path = run_paths["root"] / "kfold_results.csv"
+    save_run_summary_csv(summary_csv_path, final_summary)
+    final_summary["artifacts"]["summary_csv"] = str(summary_csv_path.resolve())
+    save_metrics_json(metrics_json_path, final_summary)
+
+    LOGGER.info(
+        "Final summary | dataset=%s model=%s %s=%.6f +/- %.6f | PSNR=%s | SSIM=%s",
+        config.dataset,
+        config.model,
+        "mean_noise_loss" if is_diffusion(config.model) else "mean_loss",
+        final_summary["mean_loss"],
+        final_summary["std_loss"],
+        format_metric(final_summary["psnr"]),
+        format_metric(final_summary["ssim"]),
+    )
+    LOGGER.info("Artifacts saved to %s", run_paths["root"].resolve())
+    return run_paths["root"]
 
 
 def main() -> None:
-    global CONFIG
     args = parse_args()
-    selected_models = args.models
-    selected_datasets = args.datasets
-    config_updates: dict[str, object] = {}
-    if args.epochs is not None:
-        config_updates["epochs"] = args.epochs
-    if args.batch_size is not None:
-        config_updates["batch_size"] = args.batch_size
-    if args.n_splits is not None:
-        config_updates["n_splits"] = args.n_splits
-    if args.base_channels is not None:
-        config_updates["latent_dims"] = tuple(args.base_channels)
-    if args.diffusion_timesteps is not None:
-        config_updates["diffusion_timesteps"] = args.diffusion_timesteps
-    if args.diffusion_log_interval is not None:
-        config_updates["diffusion_log_interval"] = args.diffusion_log_interval
-    if args.diffusion_val_fraction is not None:
-        config_updates["diffusion_val_fraction"] = args.diffusion_val_fraction
-    if config_updates:
-        CONFIG = replace(CONFIG, **config_updates)
+    cli_args = sys.argv[1:]
+    selected_models = resolve_selected_models(args)
+    selected_datasets = resolve_selected_datasets(args)
+    base_config = build_base_config(args)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    set_seed(CONFIG.random_seed)
-    CONFIG.output_dir.mkdir(parents=True, exist_ok=True)
-    diffusion_output_dirs = ensure_diffusion_output_dirs(CONFIG.output_dir)
-
-    print(f"Using device: {device}")
-    print(f"Selected datasets: {', '.join(dataset.upper() for dataset in selected_datasets)}")
-    print(f"Selected models: {', '.join(model.upper() for model in selected_models)}")
-    all_results: list[dict[str, float | int | str]] = []
-    
+    run_dirs: list[Path] = []
     for dataset_name in selected_datasets:
-        dataset = get_dataset(dataset_name=dataset_name, train=True)
-        print(f"Dataset {dataset_name.upper()} train size: {len(dataset)} samples")
+        for model_name in selected_models:
+            run_config = build_run_config(base_config, dataset_name, model_name)
+            run_dirs.append(run_single_experiment(run_config, cli_args, device))
 
-        for latent_dim in CONFIG.latent_dims:
-            for model_type in selected_models:
-                capacity_label = format_capacity_label(model_type, latent_dim)
-                
-                noise_level = DAE_NOISE_LEVEL if is_denoising(model_type) else 0.0
-                noise_label = f"{noise_level:g}"
-                
-                if model_type == "diffusion":
-                    print()
-                    print_diffusion_experiment_header(dataset_name, latent_dim)
-                elif is_denoising(model_type):
-                    print(f"\nRunning {model_type.upper()} with noise={noise_label}")
-                    print(f"[{dataset_name.upper()} | {model_type.upper()} | noise={noise_label}] {capacity_label}")
-                else:
-                    print(f"\nRunning {model_type.upper()}")
-                    print(f"[{dataset_name.upper()} | {model_type.upper()}] {capacity_label}")
-
-                experiment_result = run_kfold_experiment(
-                    latent_dim,
-                    dataset_name=dataset_name,
-                    model_type=model_type,
-                    noise_level=noise_level,
-                )
-                
-                row: dict[str, float | int | str] = {
-                    "dataset_name": dataset_name,
-                    "model_type": model_type,
-                    "latent_dim": latent_dim,
-                    "mean_loss": float(experiment_result["mean_loss"]),
-                    "std_loss": float(experiment_result["std_loss"]),
-                    "psnr": float(experiment_result["psnr"]),
-                    "ssim": float(experiment_result["ssim"]),
-                }
-                if is_denoising(model_type):
-                    row["noise_level"] = noise_label
-                all_results.append(row)
-
-                best_fold = experiment_result["best_fold"]
-                if best_fold is None:
-                    continue
-
-                scheduler = None
-                if is_vae_model(model_type):
-                    model_class = VariationalAutoencoder
-                    model = model_class(latent_dim=latent_dim).to(DEVICE)
-                elif model_type in ("ae", "dae"):
-                    model_class = FullyConnectedAutoencoder
-                    model = model_class(latent_dim=latent_dim).to(DEVICE)
-                elif model_type == "diffusion":
-                    model = DiffusionUNet(base_channels=latent_dim).to(DEVICE)
-                    scheduler = get_noise_schedule(CONFIG.diffusion_timesteps, DEVICE)
-                else:
-                    raise NotImplementedError(f"Model visualization unsupported for {model_type}")
-                    
-                model.load_state_dict(best_fold["model_state_dict"])
-                
-                if model_type == "diffusion":
-                    best_eval_dataset = get_dataset(dataset_name=dataset_name, train=False)
-                    best_val_loader = create_loader(best_eval_dataset, shuffle=False)
-                else:
-                    best_val_subset = Subset(dataset, best_fold["val_indices"])
-                    best_val_loader = create_loader(best_val_subset, shuffle=False)
-                
-                artifact_stem = f"{dataset_name}_{model_type}"
-                if is_denoising(model_type):
-                    artifact_stem = f"{artifact_stem}_noise_{noise_label}"
-
-                if model_type == "diffusion":
-                    diffusion_config = build_diffusion_artifact_config(dataset_name, latent_dim)
-                    plot_loss_curves(
-                        best_fold["train_losses"],
-                        best_fold["val_losses"],
-                        diffusion_output_dirs["loss_curves"]
-                        / f"{format_experiment_name(diffusion_config, 'diffusion_loss', include_epochs=True)}.png",
-                        title=(
-                            f"Diffusion Training Loss "
-                            f"(Base Channels = {latent_dim}, Timesteps = {CONFIG.diffusion_timesteps})"
-                        ),
-                        y_label="MSE Loss",
-                    )
-                    generated_samples = sample_images(
-                        model,
-                        scheduler,
-                        DEVICE,
-                        num_samples=10,
-                    )
-                    plot_image_grid(
-                        generated_samples,
-                        diffusion_output_dirs["samples"]
-                        / f"{format_experiment_name(diffusion_config, 'samples')}.png",
-                        title=f"Diffusion Generated Samples ({dataset_name.upper()}, Base Channels = {latent_dim})",
-                    )
-                    plot_diffusion_snapshots(
-                        model,
-                        scheduler,
-                        DEVICE,
-                        dataset_name=dataset_name,
-                        base_channels=latent_dim,
-                        save_path=diffusion_output_dirs["snapshots"]
-                        / f"{format_experiment_name(diffusion_config, 'snapshots')}.png",
-                    )
-                else:
-                    plot_loss_curves(
-                        best_fold["train_losses"],
-                        best_fold["val_losses"],
-                        CONFIG.output_dir / f"{artifact_stem}_loss_curve_{latent_dim}.png",
-                    )
-                    show_reconstructions(
-                        model,
-                        best_val_loader,
-                        DEVICE,
-                        CONFIG.output_dir / f"{artifact_stem}_latent_{latent_dim}.png",
-                        model_type=model_type,
-                        noise_level=noise_level,
-                    )
-                    plot_latent_space(
-                        model,
-                        best_val_loader,
-                        DEVICE,
-                        CONFIG.output_dir / f"{artifact_stem}_latent_space_{latent_dim}.png",
-                    )
-                    
-                    if is_vae_model(model_type):
-                        generate_samples(
-                            model,
-                            latent_dim,
-                            DEVICE,
-                            save_path=CONFIG.output_dir / f"vae_generated_{dataset_name}_latent_{latent_dim}.png",
-                        )
-                        interpolate_images(
-                            model,
-                            best_val_loader,
-                            DEVICE,
-                            save_path=CONFIG.output_dir / f"vae_interpolation_{dataset_name}_latent_{latent_dim}.png",
-                        )
-
-            latent_rows = [
-                row
-                for row in all_results
-                if row["dataset_name"] == dataset_name and int(row["latent_dim"]) == latent_dim
-            ]
-            plot_model_metric_comparison(
-                latent_rows,
-                dataset_name,
-                latent_dim,
-                CONFIG.output_dir / f"{dataset_name}_model_comparison_capacity_{latent_dim}.png",
-            )
-
-        dataset_rows = [row for row in all_results if row["dataset_name"] == dataset_name]
-        plot_metrics_vs_latent_by_model(
-            dataset_rows,
-            dataset_name,
-            CONFIG.output_dir / f"{dataset_name}_metrics_vs_capacity_by_model.png",
-        )
-
-    save_results_csv(all_results, CONFIG.output_dir / "kfold_results.csv")
-
-    print("\nFinal Summary")
-    for row in all_results:
-        noise_suffix = f" | noise={row['noise_level']}" if "noise_level" in row else ""
-        capacity_label = format_capacity_label(str(row["model_type"]), int(row["latent_dim"]))
-        loss_label = "Mean Noise Loss" if str(row["model_type"]) == "diffusion" else "Mean Loss"
-        print(
-            f"[{str(row['dataset_name']).upper()} | {str(row['model_type']).upper()}{noise_suffix}] "
-            f"{capacity_label} | {loss_label}={float(row['mean_loss']):.6f} ± "
-            f"{float(row['std_loss']):.6f} | PSNR={format_metric(float(row['psnr']))} | "
-            f"SSIM={format_metric(float(row['ssim']))}"
-        )
-
-    print(f"\nArtifacts saved to: {CONFIG.output_dir.resolve()}")
+    if run_dirs:
+        print("Completed run directories:")
+        for run_dir in run_dirs:
+            print(run_dir.resolve())
 
 
 if __name__ == "__main__":
