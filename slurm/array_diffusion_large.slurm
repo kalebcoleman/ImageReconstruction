@@ -6,7 +6,7 @@
 #SBATCH --mem=32G
 #SBATCH --gres=gpu:1
 #SBATCH --time=12:00:00
-#SBATCH --array=0-19%2
+#SBATCH --array=0-29%2
 #SBATCH --output=logs/%x_%A_%a.out
 #SBATCH --error=logs/%x_%A_%a.err
 
@@ -39,8 +39,9 @@ DATA_DIR="${DATA_DIR:-${STORAGE_ROOT}/data}"
 OUTPUT_DIR="${OUTPUT_DIR:-${STORAGE_ROOT}/outputs}"
 
 # Large sweep design:
-# - the first 12 tasks extend the medium study to 1000 diffusion steps and keep two seeds
-# - the last 8 tasks probe optimization sensitivity on the expensive 500/1000-step settings
+# - the first 18 tasks extend the medium study to 1000 diffusion steps, add base_channels=64,
+#   and keep two seeds for the core scientific comparison
+# - the last 12 tasks probe optimization sensitivity on the expensive 500/1000-step settings
 # - this is intentionally curated rather than a full Cartesian product
 TASK_SPECS=(
   "250 16 128 1e-3 42"
@@ -55,14 +56,24 @@ TASK_SPECS=(
   "500 32 128 1e-3 123"
   "1000 32 128 1e-3 42"
   "1000 32 128 1e-3 123"
+  "250 64 128 1e-3 42"
+  "250 64 128 1e-3 123"
+  "500 64 128 1e-3 42"
+  "500 64 128 1e-3 123"
+  "1000 64 128 1e-3 42"
+  "1000 64 128 1e-3 123"
   "500 16 64 1e-3 42"
   "500 16 64 3e-4 42"
   "500 32 64 1e-3 42"
   "500 32 64 3e-4 42"
+  "500 64 64 1e-3 42"
+  "500 64 64 3e-4 42"
   "1000 16 64 1e-3 42"
   "1000 16 64 3e-4 42"
   "1000 32 64 1e-3 42"
   "1000 32 64 3e-4 42"
+  "1000 64 64 1e-3 42"
+  "1000 64 64 3e-4 42"
 )
 
 load_cluster_modules

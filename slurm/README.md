@@ -26,7 +26,7 @@ outputs/mnist/diffusion/mnist_diffusion_t500_ch16_bs128_lr1e-3_seed42_job12345_a
 - `test_diffusion.slurm`: cheap smoke test that verifies environment activation, CUDA visibility, dataset access, CLI parsing, output writing, and logging.
 - `run_exp.slurm`: single-run entrypoint for ad hoc experiments or follow-up reruns of one specific config.
 - `array_diffusion_medium.slurm`: main report-friendly sweep. This is the best default for a class project demo.
-- `array_diffusion_large.slurm`: optional heavier sweep that adds 1000-timestep runs and limited optimizer/batch sensitivity checks.
+- `array_diffusion_large.slurm`: optional heavier sweep that adds 1000-timestep runs, extends width to `base_channels=64`, and adds limited optimizer/batch sensitivity checks.
 - `array_diffusion.slurm`: alias for the medium sweep so old submission habits still work.
 
 ## Environment activation
@@ -119,16 +119,15 @@ Use this only after the medium sweep behaves well:
 sbatch slurm/array_diffusion_large.slurm
 ```
 
-It runs 20 tasks total with `#SBATCH --array=0-19%2`:
+It runs 30 tasks total with `#SBATCH --array=0-29%2`:
 
-- extends schedule length to `1000` timesteps
-- keeps the stronger widths `16` and `32`
-- keeps two seeds on the core `250/500/1000` schedule study
-- adds a small set of `batch_size=64` and `lr=3e-4` runs on the expensive `500/1000` settings
+- core study: `18` tasks = timesteps `250`, `500`, `1000` x base channels `16`, `32`, `64` x seeds `42`, `123` with fixed `batch_size=128` and `lr=1e-3`
+- sensitivity study: `12` tasks = timesteps `500`, `1000` x base channels `16`, `32`, `64` x learning rates `1e-3`, `3e-4` with fixed `batch_size=64` and seed `42`
 
 Why this large sweep is still defensible:
 
 - 1000 timesteps is expensive enough to be worth discussing explicitly
+- base_channels `64` is added only where it preserves the same two-part study logic
 - the extra optimizer/batch checks are targeted at the high-cost settings instead of every combination
 - the `%2` concurrency cap keeps the run polite on shared hardware
 
