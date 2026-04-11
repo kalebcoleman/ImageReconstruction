@@ -40,7 +40,7 @@ from torchvision import datasets, transforms
 
 from diffusion.model import DiffusionUNet
 from diffusion.sampling import sample_images
-from diffusion.scheduler import get_noise_schedule
+from diffusion.scheduler import get_noise_schedule, predict_x0_from_noise, q_sample
 from diffusion.training import (
     _compute_batch_ssim,
     eval_diffusion_epoch,
@@ -311,6 +311,30 @@ def resolve_run_dir(config: ExperimentConfig, *, timestamp: datetime) -> dict[st
     for path in paths.values():
         path.mkdir(parents=True, exist_ok=True)
     return paths
+
+
+def resolve_legacy_artifact_paths(config: ExperimentConfig) -> dict[str, Path]:
+    output_dir = Path(config.output_dir)
+
+    if is_diffusion(config.model):
+        model_root = output_dir / config.model
+        run_stub = slugify(config.run_name) if config.run_name else slugify(auto_run_name(config, datetime.now()))
+        return {
+            "loss_curve": model_root / "loss_curves" / f"{run_stub}.png",
+            "samples": model_root / "samples" / f"{run_stub}.png",
+            "snapshots": model_root / "snapshots" / f"{run_stub}.png",
+            "reconstructions": model_root / "reconstructions" / f"{run_stub}.png",
+        }
+
+    model_root = output_dir / config.model
+    run_stub = slugify(config.run_name) if config.run_name else slugify(auto_run_name(config, datetime.now()))
+    return {
+        "loss_curve": model_root / "loss_curves" / f"{run_stub}.png",
+        "reconstructions": model_root / "reconstructions" / f"{run_stub}.png",
+        "latent_space": model_root / "latent_space" / f"{run_stub}.png",
+        "samples": model_root / "generated" / f"{run_stub}.png",
+        "interpolations": model_root / "interpolations" / f"{run_stub}.png",
+    }
 
 
 def setup_logging(run_dir: Path) -> Path:
@@ -732,6 +756,7 @@ def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> to
 
 
 def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     num_images = images.shape[0]
     figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
     axes = np.atleast_1d(axes)
@@ -745,6 +770,7 @@ def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
 
 
 def plot_image_grid(images: torch.Tensor, save_path: Path, title: str, *, num_cols: int = 5) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     images = prepare_display_images(images)
     num_images = images.shape[0]
     num_cols = max(1, min(num_cols, num_images))
@@ -772,6 +798,7 @@ def plot_loss_curves(
     title: str | None = None,
     y_label: str = "Loss",
 ) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     epochs = np.arange(1, len(train_losses) + 1)
     figure, axis = plt.subplots(figsize=(8, 5))
     axis.plot(epochs, train_losses, marker="o", linewidth=2.0, markersize=5, label="Train Loss")
@@ -788,6 +815,7 @@ def plot_loss_curves(
 
 
 def plot_latent_space(model: nn.Module, loader: DataLoader, device: torch.device, save_path: Path) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
     latent_vectors: list[np.ndarray] = []
     labels_list: list[np.ndarray] = []
@@ -829,6 +857,7 @@ def show_reconstructions(
     model_type: str,
     noise_level: float,
 ) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
     clean_images, _ = next(iter(loader))
     num_images = min(10, clean_images.shape[0])
@@ -881,6 +910,7 @@ def generate_samples(
     save_path: Path,
     num_samples: int,
 ) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
     with torch.no_grad():
         z = torch.randn(num_samples, latent_dim, device=device)
@@ -931,6 +961,7 @@ def plot_diffusion_snapshots(
     num_samples: int,
     num_snapshots: int = 9,
 ) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
     _, intermediate_images, intermediate_steps = sample_images(
         model,
         scheduler,
@@ -959,6 +990,63 @@ def plot_diffusion_snapshots(
     figure.suptitle(
         f"Reverse Diffusion Process (Noise -> Image)\n"
         f"{dataset_name.upper()} | Base Channels = {base_channels}",
+        fontsize=13,
+    )
+    figure.tight_layout()
+    figure.savefig(save_path, dpi=200, bbox_inches="tight")
+    plt.close(figure)
+
+
+def plot_diffusion_reconstructions(
+    model: nn.Module,
+    scheduler: object,
+    loader: DataLoader,
+    device: torch.device,
+    *,
+    dataset_name: str,
+    base_channels: int,
+    save_path: Path,
+    num_images: int = 8,
+) -> None:
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    model.eval()
+
+    clean_images, _ = next(iter(loader))
+    num_images = min(num_images, clean_images.shape[0])
+    clean_images = clean_images[:num_images].to(device)
+
+    preview_step = max(1, scheduler.num_timesteps // 2)
+    timesteps = torch.full((num_images,), preview_step, device=device, dtype=torch.long)
+    noise = torch.randn_like(clean_images)
+    noisy_images = q_sample(clean_images, timesteps, noise, scheduler)
+
+    with torch.no_grad():
+        predicted_noise = model(noisy_images, timesteps)
+        reconstructed_images = predict_x0_from_noise(
+            noisy_images,
+            timesteps,
+            predicted_noise,
+            scheduler,
+        ).clamp(0.0, 1.0)
+
+    clean_images = clean_images.detach().cpu()
+    noisy_images = noisy_images.detach().cpu()
+    reconstructed_images = reconstructed_images.detach().cpu()
+
+    figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4.2), squeeze=False)
+    row_titles = ("Original", f"Noisy (t={preview_step})", "Predicted x0")
+    image_rows = (clean_images, noisy_images, reconstructed_images)
+
+    for row_idx, (row_title, row_images) in enumerate(zip(row_titles, image_rows)):
+        for col_idx in range(num_images):
+            axis = axes[row_idx, col_idx]
+            axis.imshow(row_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
+            axis.axis("off")
+            if col_idx == 0:
+                axis.set_title(row_title)
+
+    figure.suptitle(
+        f"Diffusion Reconstruction Preview ({dataset_name.upper()}, Channels={base_channels})",
         fontsize=13,
     )
     figure.tight_layout()
@@ -1057,6 +1145,30 @@ def count_trainable_parameters(model: nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
 
 
+def log_artifact_saved(label: str, path: Path) -> str:
+    resolved_path = str(path.resolve())
+    LOGGER.info("%s saved to %s", label, resolved_path)
+    return resolved_path
+
+
+def save_and_log_artifact(
+    label: str,
+    primary_path: Path,
+    save_fn: Any,
+    *,
+    legacy_path: Path | None = None,
+) -> list[str]:
+    saved_paths: list[str] = []
+    save_fn(primary_path)
+    saved_paths.append(log_artifact_saved(label, primary_path))
+
+    if legacy_path is not None and legacy_path.resolve() != primary_path.resolve():
+        save_fn(legacy_path)
+        saved_paths.append(log_artifact_saved(f"{label} (legacy path)", legacy_path))
+
+    return saved_paths
+
+
 def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device: torch.device) -> Path:
     timestamp = datetime.now()
     run_paths = resolve_run_dir(config, timestamp=timestamp)
@@ -1064,6 +1176,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     seed_everything(config.seed)
     config_path = save_config(config, run_paths["root"], cli_args=cli_args, resolved_paths=run_paths)
     metrics_jsonl_path = run_paths["root"] / "metrics.jsonl"
+    legacy_paths = resolve_legacy_artifact_paths(config)
 
     log_run_header(config, run_paths, device, cli_args)
     LOGGER.info("Saved resolved config to %s", config_path.resolve())
@@ -1244,12 +1357,17 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         eval_dataset = get_dataset(config, config.dataset, train=False)
         best_eval_loader = create_loader(eval_dataset, config, shuffle=False)
         loss_curve_path = run_paths["plots"] / "loss_curve.png"
-        plot_loss_curves(
-            best_payload["train_losses"],
-            best_payload["val_losses"],
+        logged_loss_curve_paths = save_and_log_artifact(
+            "Diffusion loss curve",
             loss_curve_path,
-            title=f"Diffusion Training Loss ({config.dataset.upper()}, Channels={config.base_channels})",
-            y_label="MSE Loss",
+            lambda target: plot_loss_curves(
+                best_payload["train_losses"],
+                best_payload["val_losses"],
+                target,
+                title=f"Diffusion Training Loss ({config.dataset.upper()}, Channels={config.base_channels})",
+                y_label="MSE Loss",
+            ),
+            legacy_path=legacy_paths["loss_curve"],
         )
         sample_path = run_paths["samples"] / "generated_samples.png"
         generated_samples = sample_images(
@@ -1258,23 +1376,51 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             device,
             num_samples=config.sample_count,
         )
-        plot_image_grid(
-            generated_samples,
+        logged_sample_paths = save_and_log_artifact(
+            "Diffusion sample grid",
             sample_path,
-            title=f"Diffusion Samples ({config.dataset.upper()}, Channels={config.base_channels})",
+            lambda target: plot_image_grid(
+                generated_samples,
+                target,
+                title=f"Diffusion Samples ({config.dataset.upper()}, Channels={config.base_channels})",
+            ),
+            legacy_path=legacy_paths["samples"],
         )
         snapshot_path = run_paths["plots"] / "diffusion_snapshots.png"
-        plot_diffusion_snapshots(
-            best_model,
-            best_scheduler,
-            device,
-            dataset_name=config.dataset,
-            base_channels=config.base_channels,
-            save_path=snapshot_path,
-            num_samples=min(config.sample_count, 8),
+        logged_snapshot_paths = save_and_log_artifact(
+            "Diffusion reverse-process snapshots",
+            snapshot_path,
+            lambda target: plot_diffusion_snapshots(
+                best_model,
+                best_scheduler,
+                device,
+                dataset_name=config.dataset,
+                base_channels=config.base_channels,
+                save_path=target,
+                num_samples=min(config.sample_count, 8),
+            ),
+            legacy_path=legacy_paths["snapshots"],
         )
-        final_summary["artifacts"]["plots"] = [str(loss_curve_path.resolve()), str(snapshot_path.resolve())]
-        final_summary["artifacts"]["samples"] = [str(sample_path.resolve())]
+        reconstruction_path = run_paths["plots"] / "reconstructions.png"
+        logged_reconstruction_paths = save_and_log_artifact(
+            "Diffusion reconstruction preview",
+            reconstruction_path,
+            lambda target: plot_diffusion_reconstructions(
+                best_model,
+                best_scheduler,
+                best_eval_loader,
+                device,
+                dataset_name=config.dataset,
+                base_channels=config.base_channels,
+                save_path=target,
+                num_images=min(config.sample_count, 8),
+            ),
+            legacy_path=legacy_paths["reconstructions"],
+        )
+        final_summary["artifacts"]["plots"] = (
+            logged_loss_curve_paths + logged_snapshot_paths + logged_reconstruction_paths
+        )
+        final_summary["artifacts"]["samples"] = logged_sample_paths
     else:
         dataset = get_dataset(config, config.dataset, train=True)
         best_val_subset = Subset(dataset, best_payload["val_indices"])
@@ -1284,6 +1430,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         latent_path = run_paths["plots"] / "latent_space.png"
 
         plot_loss_curves(best_payload["train_losses"], best_payload["val_losses"], loss_curve_path)
+        logged_loss_curve_path = log_artifact_saved("Loss curve", loss_curve_path)
         show_reconstructions(
             best_model,
             best_val_loader,
@@ -1292,9 +1439,11 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             model_type=config.model,
             noise_level=noise_level,
         )
+        logged_recon_path = log_artifact_saved("Reconstruction preview", recon_path)
         plot_latent_space(best_model, best_val_loader, device, latent_path)
+        logged_latent_path = log_artifact_saved("Latent space plot", latent_path)
 
-        artifact_plots = [str(loss_curve_path.resolve()), str(recon_path.resolve()), str(latent_path.resolve())]
+        artifact_plots = [logged_loss_curve_path, logged_recon_path, logged_latent_path]
         sample_artifacts: list[str] = []
         if is_vae_model(config.model):
             generated_path = run_paths["samples"] / "generated_samples.png"
@@ -1306,8 +1455,10 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 save_path=generated_path,
                 num_samples=config.sample_count,
             )
+            logged_generated_path = log_artifact_saved("VAE generated sample grid", generated_path)
             interpolate_images(best_model, best_val_loader, device, save_path=interpolation_path)
-            sample_artifacts.extend([str(generated_path.resolve()), str(interpolation_path.resolve())])
+            logged_interpolation_path = log_artifact_saved("VAE interpolation grid", interpolation_path)
+            sample_artifacts.extend([logged_generated_path, logged_interpolation_path])
 
         final_summary["artifacts"]["plots"] = artifact_plots
         final_summary["artifacts"]["samples"] = sample_artifacts

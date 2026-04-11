@@ -203,8 +203,21 @@ Each run directory contains:
 - `metrics.json`: final summary
 - `kfold_results.csv`: compact summary CSV
 - `checkpoints/best.pt`: best model checkpoint
-- `plots/`: loss curves and visual diagnostics
-- `samples/`: generated samples where applicable
+- `plots/`: saved visuals such as `loss_curve.png`, diffusion `reconstructions.png`, and `diffusion_snapshots.png`
+- `samples/`: generated sample grids such as diffusion `generated_samples.png`
+
+For diffusion runs, successful jobs now always save visible artifacts in the run directory and also mirror the main images into the familiar legacy layout:
+
+- `plots/loss_curve.png`
+- `plots/reconstructions.png`
+- `plots/diffusion_snapshots.png`
+- `samples/generated_samples.png`
+- `outputs/diffusion/loss_curves/<run_name>.png`
+- `outputs/diffusion/reconstructions/<run_name>.png`
+- `outputs/diffusion/snapshots/<run_name>.png`
+- `outputs/diffusion/samples/<run_name>.png`
+
+That guarantee applies even to short smoke tests, so a 1-epoch Slurm validation run still leaves behind report/demo-friendly images.
 
 If a target run directory already exists, the trainer appends a numeric suffix instead of overwriting it.
 

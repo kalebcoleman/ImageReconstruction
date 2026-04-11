@@ -74,4 +74,8 @@ def sample_images(
     if not return_intermediate:
         return samples
 
+    if not intermediate_steps or intermediate_steps[-1] != 0:
+        intermediate_images.append(samples)
+        intermediate_steps.append(0)
+
     return samples, intermediate_images, intermediate_steps
