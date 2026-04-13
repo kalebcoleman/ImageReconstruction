@@ -32,9 +32,18 @@ Model-specific options:
 - `--timesteps`
 - `--base_channels`
 - `--time_dim`
+- `--schedule {linear,cosine}`
 - `--beta_start`
 - `--beta_end`
+- `--ema_decay`
+- `--num_res_blocks`
 - `--sample_count`
+
+Notes:
+
+- `--timesteps` is the diffusion process length and still supports settings such as `500` and `1000`.
+- `--time_dim` is only the timestep embedding width inside the UNet.
+- `--beta_start` and `--beta_end` shape the linear schedule; the cosine schedule uses the standard improved-DDPM cosine curve.
 
 ## Pre-download datasets
 
@@ -80,6 +89,9 @@ python3 train.py \
   --batch_size 128 \
   --timesteps 200 \
   --base_channels 16 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
   --sample_count 8
 ```
 
@@ -107,6 +119,9 @@ python3 train.py \
   --num_workers 4 \
   --timesteps 200 \
   --base_channels 16 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
   --beta_start 1e-4 \
   --beta_end 2e-2 \
   --sample_count 16
@@ -145,6 +160,9 @@ python3 train.py \
   --num_workers ${SLURM_CPUS_PER_TASK:-4} \
   --timesteps 200 \
   --base_channels 16 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
   --sample_count 16
 ```
 
@@ -168,6 +186,9 @@ for seed in 1 2; do
       --num_workers 4 \
       --timesteps 200 \
       --base_channels "${channels}" \
+      --schedule cosine \
+      --ema_decay 0.999 \
+      --num_res_blocks 2 \
       --sample_count 16
   done
 done
@@ -202,7 +223,7 @@ Each run directory contains:
 - `metrics.jsonl`: epoch-by-epoch metrics
 - `metrics.json`: final summary
 - `kfold_results.csv`: compact summary CSV
-- `checkpoints/best.pt`: best model checkpoint
+- `checkpoints/best.pt`: best model checkpoint, plus `ema_state_dict` when EMA is enabled
 - `plots/`: saved visuals such as `loss_curve.png`, diffusion `reconstructions.png`, and `diffusion_snapshots.png`
 - `samples/`: generated sample grids such as diffusion `generated_samples.png`
 

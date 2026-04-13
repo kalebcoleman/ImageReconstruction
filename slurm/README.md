@@ -58,6 +58,9 @@ The scripts now use the real trainer flags directly:
 - `--timesteps`
 - `--base_channels`
 - `--time_dim`
+- `--schedule`
+- `--ema_decay`
+- `--num_res_blocks`
 - `--diffusion_log_interval`
 
 Backward-compatible aliases such as `--batch-size` and `--diffusion-timesteps` still work, but the Slurm scripts use the canonical names above.
@@ -77,6 +80,9 @@ Default smoke config:
 - `epochs=1`
 - `timesteps=20`
 - `base_channels=8`
+- `schedule=linear`
+- `ema_decay=0.0`
+- `num_res_blocks=1`
 - `batch_size=32`
 - `lr=1e-3`
 - `seed=42`
@@ -136,7 +142,7 @@ Why this large sweep is still defensible:
 Use `run_exp.slurm` to rerun one config cleanly:
 
 ```bash
-sbatch --export=ALL,MODEL=diffusion,DATASET=mnist,EPOCHS=15,BATCH_SIZE=128,LR=1e-3,SEED=42,TIMESTEPS=250,BASE_CHANNELS=16,OUTPUT_DIR=/scratch/$USER/image-reconstruction/outputs,DATA_DIR=/scratch/$USER/image-reconstruction/data slurm/run_exp.slurm
+sbatch --export=ALL,MODEL=diffusion,DATASET=mnist,EPOCHS=15,BATCH_SIZE=128,LR=1e-3,SEED=42,TIMESTEPS=250,BASE_CHANNELS=16,SCHEDULE=cosine,EMA_DECAY=0.999,NUM_RES_BLOCKS=2,OUTPUT_DIR=/scratch/$USER/image-reconstruction/outputs,DATA_DIR=/scratch/$USER/image-reconstruction/data slurm/run_exp.slurm
 ```
 
 This is useful for:

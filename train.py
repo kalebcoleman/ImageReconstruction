@@ -38,6 +38,7 @@ except ModuleNotFoundError:
     StructuralSimilarityIndexMeasure = None
 from torchvision import datasets, transforms
 
+from diffusion.ema import create_ema_model, select_eval_model
 from diffusion.model import DiffusionUNet
 from diffusion.sampling import sample_images
 from diffusion.scheduler import get_noise_schedule, predict_x0_from_noise, q_sample
@@ -82,8 +83,11 @@ class ExperimentConfig:
     timesteps: int = 10
     base_channels: int = 8
     time_dim: int = 64
+    schedule: str = "linear"
     beta_start: float = 1e-4
     beta_end: float = 2e-2
+    ema_decay: float = 0.0
+    num_res_blocks: int = 1
     sample_count: int = 10
     n_splits: int = 2
     dae_noise_level: float = 0.2
@@ -149,8 +153,30 @@ def parse_args() -> argparse.Namespace:
         default=ExperimentConfig.base_channels,
     )
     parser.add_argument("--time_dim", "--time-dim", dest="time_dim", type=int, default=ExperimentConfig.time_dim)
+    parser.add_argument(
+        "--schedule",
+        choices=("linear", "cosine"),
+        default=ExperimentConfig.schedule,
+        help="Diffusion beta schedule. Linear preserves the historical baseline.",
+    )
     parser.add_argument("--beta_start", "--beta-start", dest="beta_start", type=float, default=ExperimentConfig.beta_start)
     parser.add_argument("--beta_end", "--beta-end", dest="beta_end", type=float, default=ExperimentConfig.beta_end)
+    parser.add_argument(
+        "--ema_decay",
+        "--ema-decay",
+        dest="ema_decay",
+        type=float,
+        default=ExperimentConfig.ema_decay,
+        help="EMA decay for diffusion weights. Use 0 to disable EMA.",
+    )
+    parser.add_argument(
+        "--num_res_blocks",
+        "--num-res-blocks",
+        dest="num_res_blocks",
+        type=int,
+        default=ExperimentConfig.num_res_blocks,
+        help="Residual blocks per UNet stage for diffusion.",
+    )
     parser.add_argument("--sample_count", "--sample-count", dest="sample_count", type=int, default=ExperimentConfig.sample_count)
     parser.add_argument("--n_splits", "--n-splits", dest="n_splits", type=int, default=ExperimentConfig.n_splits)
     parser.add_argument(
@@ -183,6 +209,10 @@ def parse_args() -> argparse.Namespace:
         parser.error("--base_channels, --latent_dim, and --time_dim must be at least 1")
     if args.beta_start <= 0 or args.beta_end <= 0 or args.beta_end <= args.beta_start:
         parser.error("--beta_end must be greater than --beta_start, and both must be positive")
+    if not 0.0 <= args.ema_decay < 1.0:
+        parser.error("--ema_decay must be in [0, 1)")
+    if args.num_res_blocks < 1:
+        parser.error("--num_res_blocks must be at least 1")
     if args.sample_count < 1:
         parser.error("--sample_count must be at least 1")
     if args.dae_noise_level < 0:
@@ -233,8 +263,11 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
         timesteps=args.timesteps,
         base_channels=args.base_channels,
         time_dim=args.time_dim,
+        schedule=args.schedule,
         beta_start=args.beta_start,
         beta_end=args.beta_end,
+        ema_decay=args.ema_decay,
+        num_res_blocks=args.num_res_blocks,
         sample_count=args.sample_count,
         n_splits=args.n_splits,
         dae_noise_level=args.dae_noise_level,
@@ -1061,12 +1094,17 @@ def instantiate_model(config: ExperimentConfig, device: torch.device) -> tuple[n
     elif config.model in ("ae", "dae"):
         model = FullyConnectedAutoencoder(latent_dim=config.latent_dim).to(device)
     elif is_diffusion(config.model):
-        model = DiffusionUNet(base_channels=config.base_channels, time_dim=config.time_dim).to(device)
+        model = DiffusionUNet(
+            base_channels=config.base_channels,
+            time_dim=config.time_dim,
+            num_res_blocks=config.num_res_blocks,
+        ).to(device)
         scheduler = get_noise_schedule(
             config.timesteps,
             device,
             beta_start=config.beta_start,
             beta_end=config.beta_end,
+            schedule_name=config.schedule,
         )
     else:
         raise NotImplementedError(f"Unsupported model: {config.model}")
@@ -1095,12 +1133,16 @@ def log_run_header(config: ExperimentConfig, run_paths: dict[str, Path], device:
     )
     if is_diffusion(config.model):
         LOGGER.info(
-            "Model hyperparameters: base_channels=%d time_dim=%d timesteps=%d beta_start=%g beta_end=%g sample_count=%d",
+            "Model hyperparameters: base_channels=%d time_dim=%d num_res_blocks=%d timesteps=%d "
+            "schedule=%s beta_start=%g beta_end=%g ema_decay=%g sample_count=%d",
             config.base_channels,
             config.time_dim,
+            config.num_res_blocks,
             config.timesteps,
+            config.schedule,
             config.beta_start,
             config.beta_end,
+            config.ema_decay,
             config.sample_count,
         )
     else:
@@ -1112,10 +1154,20 @@ def log_run_header(config: ExperimentConfig, run_paths: dict[str, Path], device:
         )
 
 
-def save_checkpoint(path: Path, model: nn.Module, config: ExperimentConfig, metrics: dict[str, Any]) -> None:
+def save_checkpoint(
+    path: Path,
+    model_state_dict: dict[str, torch.Tensor],
+    config: ExperimentConfig,
+    metrics: dict[str, Any],
+    *,
+    ema_state_dict: dict[str, torch.Tensor] | None = None,
+    evaluation_weights: str = "model",
+) -> None:
     torch.save(
         {
-            "model_state_dict": model.state_dict(),
+            "model_state_dict": model_state_dict,
+            "ema_state_dict": ema_state_dict,
+            "evaluation_weights": evaluation_weights,
             "config": json_ready(asdict(config)),
             "metrics": json_ready(metrics),
         },
@@ -1182,10 +1234,12 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     LOGGER.info("Saved resolved config to %s", config_path.resolve())
 
     noise_level = config.dae_noise_level if is_denoising(config.model) else 0.0
+    diffusion_uses_ema = is_diffusion(config.model) and config.ema_decay > 0.0
 
-    fold_metrics: list[dict[str, float]] = []
+    fold_metrics: list[dict[str, Any]] = []
     best_payload: dict[str, Any] | None = None
     best_model_state: dict[str, torch.Tensor] | None = None
+    best_ema_state: dict[str, torch.Tensor] | None = None
 
     if is_diffusion(config.model):
         train_dataset = get_dataset(config, config.dataset, train=True)
@@ -1218,6 +1272,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
 
     for fold_idx, train_loader, eval_loader, val_indices in experiment_splits:
         model, scheduler = instantiate_model(config, device)
+        ema_model = create_ema_model(model) if diffusion_uses_ema else None
         model_parameter_count = count_trainable_parameters(model)
         if fold_idx == 1:
             LOGGER.info("Trainable parameters: %d", model_parameter_count)
@@ -1233,11 +1288,14 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                     optimizer,
                     scheduler,
                     device,
+                    ema_model=ema_model,
+                    ema_decay=config.ema_decay,
                     progress_label=f"[{config.dataset.upper()} | {config.model.upper()} | Fold {fold_idx}]",
                     progress_interval=config.diffusion_log_interval,
                 )
+                eval_model = select_eval_model(model, ema_model)
                 val_loss = eval_diffusion_epoch(
-                    model,
+                    eval_model,
                     eval_loader,
                     scheduler,
                     device,
@@ -1274,6 +1332,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 "epoch": epoch,
                 "train_loss": train_loss,
                 split_name: val_loss,
+                "evaluation_weights": "ema" if ema_model is not None else "model",
             }
             append_metrics_jsonl(metrics_jsonl_path, epoch_payload)
             LOGGER.info(
@@ -1287,8 +1346,10 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             )
 
         if is_diffusion(config.model):
-            metrics = evaluate_diffusion_metrics(model, eval_loader, scheduler, device)
+            eval_model = select_eval_model(model, ema_model)
+            metrics = evaluate_diffusion_metrics(eval_model, eval_loader, scheduler, device)
             metrics["noise_mse"] = val_losses[-1]
+            metrics["evaluation_weights"] = "ema" if ema_model is not None else "model"
         else:
             metrics = evaluate_metrics(model, eval_loader, CRITERION, device, model_type=config.model)
 
@@ -1317,6 +1378,11 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 "val_losses": val_losses,
             }
             best_model_state = {key: value.detach().cpu() for key, value in model.state_dict().items()}
+            best_ema_state = (
+                {key: value.detach().cpu() for key, value in ema_model.state_dict().items()}
+                if ema_model is not None
+                else None
+            )
 
     if best_payload is None or best_model_state is None:
         raise RuntimeError("Training did not produce any results.")
@@ -1339,6 +1405,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         "run_dir": str(run_paths["root"].resolve()),
         "fold_metrics": fold_metrics,
         "best_fold": best_payload,
+        "evaluation_weights": "ema" if best_ema_state is not None else "model",
         "artifacts": {
             "config": str(config_path.resolve()),
             "log": str((run_paths["root"] / "train.log").resolve()),
@@ -1348,9 +1415,20 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
 
     best_model, best_scheduler = instantiate_model(config, device)
     best_model.load_state_dict(best_model_state)
+    best_eval_model = best_model
+    if best_ema_state is not None:
+        best_eval_model = create_ema_model(best_model).to(device)
+        best_eval_model.load_state_dict(best_ema_state)
 
     checkpoint_path = run_paths["checkpoints"] / "best.pt"
-    save_checkpoint(checkpoint_path, best_model, config, final_summary)
+    save_checkpoint(
+        checkpoint_path,
+        best_model_state,
+        config,
+        final_summary,
+        ema_state_dict=best_ema_state,
+        evaluation_weights=final_summary["evaluation_weights"],
+    )
     final_summary["artifacts"]["checkpoint"] = str(checkpoint_path.resolve())
 
     if is_diffusion(config.model):
@@ -1371,7 +1449,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         )
         sample_path = run_paths["samples"] / "generated_samples.png"
         generated_samples = sample_images(
-            best_model,
+            best_eval_model,
             best_scheduler,
             device,
             num_samples=config.sample_count,
@@ -1391,7 +1469,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             "Diffusion reverse-process snapshots",
             snapshot_path,
             lambda target: plot_diffusion_snapshots(
-                best_model,
+                best_eval_model,
                 best_scheduler,
                 device,
                 dataset_name=config.dataset,
@@ -1406,7 +1484,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             "Diffusion reconstruction preview",
             reconstruction_path,
             lambda target: plot_diffusion_reconstructions(
-                best_model,
+                best_eval_model,
                 best_scheduler,
                 best_eval_loader,
                 device,

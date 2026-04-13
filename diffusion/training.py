@@ -13,6 +13,7 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback used in lean envs.
     StructuralSimilarityIndexMeasure = None
 
+from diffusion.ema import update_ema_model
 from diffusion.scheduler import DiffusionSchedule, predict_x0_from_noise, q_sample
 
 
@@ -80,6 +81,8 @@ def train_diffusion_epoch(
     optimizer: Optimizer,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    ema_model: torch.nn.Module | None = None,
+    ema_decay: float = 0.0,
     progress_label: str | None = None,
     progress_interval: int | None = None,
 ) -> float:
@@ -107,6 +110,8 @@ def train_diffusion_epoch(
         loss = F.mse_loss(predicted_noise, noise)
         loss.backward()
         optimizer.step()
+        if ema_model is not None:
+            update_ema_model(ema_model, model, ema_decay)
 
         running_loss += loss.item()
 

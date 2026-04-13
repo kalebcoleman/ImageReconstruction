@@ -57,11 +57,12 @@ class DiffusionResBlock(nn.Module):
             if in_channels == out_channels
             else nn.Conv2d(in_channels, out_channels, kernel_size=1)
         )
+        self.activation = nn.SiLU()
 
     def forward(self, x: torch.Tensor, time_embedding: torch.Tensor) -> torch.Tensor:
         hidden = self.conv1(x)
         hidden = self.norm1(hidden)
-        hidden = torch.relu(hidden)
+        hidden = self.activation(hidden)
 
         # The timestep embedding tells the block how much noise to expect.
         time_bias = self.time_projection(time_embedding).unsqueeze(-1).unsqueeze(-1)
@@ -70,24 +71,63 @@ class DiffusionResBlock(nn.Module):
         hidden = self.conv2(hidden)
         hidden = self.norm2(hidden)
         hidden = hidden + self.skip(x)
-        return torch.relu(hidden)
+        return self.activation(hidden)
+
+
+class DiffusionBlockStack(nn.Module):
+    """Run multiple residual blocks at a fixed resolution."""
+
+    def __init__(
+        self,
+        in_channels: int,
+        out_channels: int,
+        time_dim: int,
+        num_blocks: int,
+    ) -> None:
+        super().__init__()
+        if num_blocks < 1:
+            raise ValueError("num_blocks must be at least 1")
+
+        blocks: list[DiffusionResBlock] = [
+            DiffusionResBlock(in_channels, out_channels, time_dim)
+        ]
+        blocks.extend(
+            DiffusionResBlock(out_channels, out_channels, time_dim)
+            for _ in range(num_blocks - 1)
+        )
+        self.blocks = nn.ModuleList(blocks)
+
+    def forward(self, x: torch.Tensor, time_embedding: torch.Tensor) -> torch.Tensor:
+        for block in self.blocks:
+            x = block(x, time_embedding)
+        return x
 
 
 class DiffusionUNet(nn.Module):
-    """A lightweight 3-level DDPM-style UNet for 28x28 grayscale images.
+    """A configurable 3-level DDPM-style UNet for 28x28 grayscale images.
 
     The network receives a noisy image x_t plus its timestep t and predicts the
     noise epsilon that was added. Predicting noise is stable because the target
     is always Gaussian, regardless of which digit or clothing item is present.
     """
 
-    def __init__(self, in_channels: int = 1, base_channels: int = 64, time_dim: int = 64) -> None:
+    def __init__(
+        self,
+        in_channels: int = 1,
+        base_channels: int = 64,
+        time_dim: int = 64,
+        num_res_blocks: int = 2,
+    ) -> None:
         super().__init__()
+        if num_res_blocks < 1:
+            raise ValueError("num_res_blocks must be at least 1")
+
+        self.num_res_blocks = num_res_blocks
         self.time_embedding = SinusoidalTimeEmbedding(time_dim)
         self.time_mlp = nn.Sequential(
-            nn.Linear(time_dim, time_dim * 2),
+            nn.Linear(time_dim, time_dim * 4),
             nn.SiLU(),
-            nn.Linear(time_dim * 2, time_dim),
+            nn.Linear(time_dim * 4, time_dim),
         )
 
         level1_channels = base_channels
@@ -97,7 +137,12 @@ class DiffusionUNet(nn.Module):
         self.input_projection = nn.Conv2d(in_channels, level1_channels, kernel_size=3, padding=1)
 
         # Downsample path: 28x28 -> 14x14 -> 7x7.
-        self.enc1 = DiffusionResBlock(level1_channels, level1_channels, time_dim)
+        self.enc1 = DiffusionBlockStack(
+            level1_channels,
+            level1_channels,
+            time_dim,
+            num_blocks=num_res_blocks,
+        )
         self.downsample1 = nn.Conv2d(
             level1_channels,
             level2_channels,
@@ -105,7 +150,12 @@ class DiffusionUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.enc2 = DiffusionResBlock(level2_channels, level2_channels, time_dim)
+        self.enc2 = DiffusionBlockStack(
+            level2_channels,
+            level2_channels,
+            time_dim,
+            num_blocks=num_res_blocks,
+        )
         self.downsample2 = nn.Conv2d(
             level2_channels,
             level3_channels,
@@ -113,11 +163,20 @@ class DiffusionUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.enc3 = DiffusionResBlock(level3_channels, level3_channels, time_dim)
+        self.enc3 = DiffusionBlockStack(
+            level3_channels,
+            level3_channels,
+            time_dim,
+            num_blocks=num_res_blocks,
+        )
 
         # Bottleneck at 7x7.
-        self.bottleneck1 = DiffusionResBlock(level3_channels, level3_channels, time_dim)
-        self.bottleneck2 = DiffusionResBlock(level3_channels, level3_channels, time_dim)
+        self.bottleneck = DiffusionBlockStack(
+            level3_channels,
+            level3_channels,
+            time_dim,
+            num_blocks=max(2, num_res_blocks),
+        )
 
         # Upsample path: 7x7 -> 14x14 -> 28x28.
         self.upsample1 = nn.ConvTranspose2d(
@@ -127,7 +186,12 @@ class DiffusionUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec2 = DiffusionResBlock(level2_channels + level2_channels, level2_channels, time_dim)
+        self.dec2 = DiffusionBlockStack(
+            level2_channels + level2_channels,
+            level2_channels,
+            time_dim,
+            num_blocks=num_res_blocks,
+        )
         self.upsample2 = nn.ConvTranspose2d(
             level2_channels,
             level1_channels,
@@ -135,7 +199,12 @@ class DiffusionUNet(nn.Module):
             stride=2,
             padding=1,
         )
-        self.dec1 = DiffusionResBlock(level1_channels + level1_channels, level1_channels, time_dim)
+        self.dec1 = DiffusionBlockStack(
+            level1_channels + level1_channels,
+            level1_channels,
+            time_dim,
+            num_blocks=num_res_blocks,
+        )
         self.output_norm = nn.GroupNorm(_resolve_group_count(level1_channels), level1_channels)
         self.output_activation = nn.SiLU()
         self.output_projection = nn.Conv2d(level1_channels, in_channels, kernel_size=1)
@@ -153,8 +222,7 @@ class DiffusionUNet(nn.Module):
         x = self.downsample2(skip2)
         x = self.enc3(x, time_embedding)
 
-        x = self.bottleneck1(x, time_embedding)
-        x = self.bottleneck2(x, time_embedding)
+        x = self.bottleneck(x, time_embedding)
 
         x = self.upsample1(x)
         x = torch.cat([x, skip2], dim=1)

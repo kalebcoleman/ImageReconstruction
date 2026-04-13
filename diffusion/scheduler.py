@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 
 import torch
 
@@ -10,6 +11,7 @@ class DiffusionSchedule:
     """Stores the fixed coefficients used by forward and reverse diffusion."""
 
     num_timesteps: int
+    schedule_name: str
     betas: torch.Tensor
     alphas: torch.Tensor
     alpha_hat: torch.Tensor
@@ -34,6 +36,7 @@ def get_noise_schedule(
     device: torch.device,
     beta_start: float = 1e-4,
     beta_end: float = 2e-2,
+    schedule_name: str = "linear",
 ) -> DiffusionSchedule:
     """Create the forward diffusion schedule.
 
@@ -42,7 +45,13 @@ def get_noise_schedule(
     timestep, and alpha_hat tracks how much of the original image survives.
     """
 
-    betas = torch.linspace(beta_start, beta_end, T, device=device, dtype=torch.float32)
+    if schedule_name == "linear":
+        betas = torch.linspace(beta_start, beta_end, T, device=device, dtype=torch.float32)
+    elif schedule_name == "cosine":
+        betas = _cosine_beta_schedule(T, device=device)
+    else:  # pragma: no cover - guarded by argparse in train.py
+        raise ValueError(f"Unsupported diffusion schedule: {schedule_name}")
+
     alphas = 1.0 - betas
     alpha_hat = torch.cumprod(alphas, dim=0)
     alpha_hat_previous = torch.cat(
@@ -54,6 +63,7 @@ def get_noise_schedule(
 
     return DiffusionSchedule(
         num_timesteps=T,
+        schedule_name=schedule_name,
         betas=betas,
         alphas=alphas,
         alpha_hat=alpha_hat,
@@ -62,6 +72,22 @@ def get_noise_schedule(
         sqrt_recip_alpha=torch.sqrt(1.0 / alphas),
         posterior_variance=posterior_variance,
     )
+
+
+def _cosine_beta_schedule(
+    num_timesteps: int,
+    *,
+    device: torch.device,
+    offset: float = 0.008,
+) -> torch.Tensor:
+    """Nichol & Dhariwal cosine schedule used by improved DDPM baselines."""
+
+    steps = torch.linspace(0, num_timesteps, num_timesteps + 1, device=device, dtype=torch.float32)
+    phase = ((steps / num_timesteps) + offset) / (1.0 + offset)
+    alpha_bar = torch.cos(phase * (math.pi / 2.0)).square()
+    alpha_bar = alpha_bar / alpha_bar[0]
+    betas = 1.0 - (alpha_bar[1:] / alpha_bar[:-1])
+    return betas.clamp(min=1e-8, max=0.999)
 
 
 def q_sample(
