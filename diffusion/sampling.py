@@ -12,6 +12,12 @@ def _snapshot_steps(num_timesteps: int, num_snapshots: int) -> set[int]:
     return set(np.linspace(num_timesteps - 1, 0, num=num_snapshots, dtype=int).tolist())
 
 
+def _to_display_range(images: torch.Tensor) -> torch.Tensor:
+    """Map diffusion samples from [-1, 1] into [0, 1] for saved artifacts."""
+
+    return ((images + 1.0) / 2.0).clamp(0.0, 1.0)
+
+
 @torch.no_grad()
 def sample_images(
     model: torch.nn.Module,
@@ -67,10 +73,10 @@ def sample_images(
             samples = model_mean
 
         if return_intermediate and step in snapshot_indices:
-            intermediate_images.append(samples.detach().cpu().clamp(0.0, 1.0))
+            intermediate_images.append(_to_display_range(samples.detach().cpu()))
             intermediate_steps.append(step)
 
-    samples = samples.detach().cpu().clamp(0.0, 1.0)
+    samples = _to_display_range(samples.detach().cpu())
     if not return_intermediate:
         return samples
 

@@ -55,8 +55,14 @@ import matplotlib.pyplot as plt
 
 LOGGER = logging.getLogger("image_reconstruction")
 CRITERION = nn.MSELoss()
-DATASET_TRANSFORM = transforms.ToTensor()
-DATASET_CACHE: dict[tuple[str, bool, str, bool], datasets.VisionDataset] = {}
+STANDARD_DATASET_TRANSFORM = transforms.ToTensor()
+DIFFUSION_DATASET_TRANSFORM = transforms.Compose(
+    [
+        transforms.ToTensor(),
+        transforms.Normalize((0.5,), (0.5,)),
+    ]
+)
+DATASET_CACHE: dict[tuple[str, bool, str, bool, str], datasets.VisionDataset] = {}
 SUPPORTED_MODELS = ("ae", "dae", "vae", "diffusion")
 SUPPORTED_DATASETS: dict[str, type[datasets.VisionDataset]] = {
     "mnist": datasets.MNIST,
@@ -494,7 +500,9 @@ def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> 
         raise ValueError(f"Unsupported dataset: {dataset_name}")
 
     data_dir = Path(config.data_dir)
-    cache_key = (dataset_key, train, str(data_dir.resolve()), config.download)
+    transform_name = "diffusion" if is_diffusion(config.model) else "standard"
+    transform = DIFFUSION_DATASET_TRANSFORM if is_diffusion(config.model) else STANDARD_DATASET_TRANSFORM
+    cache_key = (dataset_key, train, str(data_dir.resolve()), config.download, transform_name)
     if cache_key in DATASET_CACHE:
         return DATASET_CACHE[cache_key]
 
@@ -506,7 +514,7 @@ def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> 
             root=str(data_dir),
             train=train,
             download=config.download,
-            transform=DATASET_TRANSFORM,
+            transform=transform,
         )
     except RuntimeError as exc:
         message = str(exc).lower()
@@ -788,6 +796,12 @@ def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> to
     return display_images.clamp(0.0, 1.0)
 
 
+def diffusion_to_display_range(images: torch.Tensor) -> torch.Tensor:
+    """Map diffusion tensors from [-1, 1] back to [0, 1] for plotting."""
+
+    return ((images.detach().cpu().float() + 1.0) / 2.0).clamp(0.0, 1.0)
+
+
 def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     num_images = images.shape[0]
@@ -1012,7 +1026,7 @@ def plot_diffusion_snapshots(
     )
 
     for row_idx, (images, step_num) in enumerate(zip(intermediate_images, intermediate_steps)):
-        display_images = prepare_display_images(images, rescale=True)
+        display_images = prepare_display_images(diffusion_to_display_range(images), rescale=True)
         for col_idx in range(num_samples):
             axis = axes[row_idx, col_idx]
             axis.imshow(display_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
@@ -1060,11 +1074,11 @@ def plot_diffusion_reconstructions(
             timesteps,
             predicted_noise,
             scheduler,
-        ).clamp(0.0, 1.0)
+        ).clamp(-1.0, 1.0)
 
-    clean_images = clean_images.detach().cpu()
-    noisy_images = noisy_images.detach().cpu()
-    reconstructed_images = reconstructed_images.detach().cpu()
+    clean_images = diffusion_to_display_range(clean_images)
+    noisy_images = diffusion_to_display_range(noisy_images)
+    reconstructed_images = diffusion_to_display_range(reconstructed_images)
 
     figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4.2), squeeze=False)
     row_titles = ("Original", f"Noisy (t={preview_step})", "Predicted x0")

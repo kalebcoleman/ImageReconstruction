@@ -47,6 +47,12 @@ def _compute_psnr(mse: float) -> float:
     return 10.0 * math.log10(1.0 / mse)
 
 
+def _diffusion_to_display_range(images: torch.Tensor) -> torch.Tensor:
+    """Map diffusion tensors from [-1, 1] to [0, 1] for image-space metrics."""
+
+    return ((images + 1.0) / 2.0).clamp(0.0, 1.0)
+
+
 def _compute_batch_ssim(predictions: torch.Tensor, targets: torch.Tensor) -> float:
     """Compute a lightweight global SSIM approximation in pure PyTorch."""
 
@@ -193,14 +199,17 @@ def evaluate_diffusion_metrics(
             timesteps,
             predicted_noise,
             scheduler,
-        ).clamp(0.0, 1.0)
+        ).clamp(-1.0, 1.0)
 
-        batch_mse = F.mse_loss(reconstructed, images).item()
+        reconstructed_for_metrics = _diffusion_to_display_range(reconstructed)
+        images_for_metrics = _diffusion_to_display_range(images)
+
+        batch_mse = F.mse_loss(reconstructed_for_metrics, images_for_metrics).item()
         if ssim_metric is not None:
-            batch_ssim = ssim_metric(reconstructed, images).item()
+            batch_ssim = ssim_metric(reconstructed_for_metrics, images_for_metrics).item()
             ssim_metric.reset()
         else:
-            batch_ssim = _compute_batch_ssim(reconstructed, images)
+            batch_ssim = _compute_batch_ssim(reconstructed_for_metrics, images_for_metrics)
 
         mse_total += batch_mse
         ssim_total += batch_ssim
