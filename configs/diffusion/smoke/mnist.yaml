@@ -1,0 +1,9 @@
+inherits:
+  - base_legacy28_gray_smoke.yaml
+config_name: mnist_smoke
+dataset: mnist
+dataset_variant: mnist_28_gray_legacy_smoke
+epochs: 1
+batch_size: 128
+num_workers: 2
+eval_batch_size: 64

@@ -622,6 +622,7 @@ def run_checkpoint_evaluation(
         title=f"Generated Samples ({config.dataset.upper()}, {config.sampler}, cfg={config.guidance_scale:g})",
     )
     artifact_paths["generated_sample_grid"] = str(sample_grid_path.resolve())
+    artifact_paths["generated_samples"] = str(sample_grid_path.resolve())
 
     if config.dataset_num_classes is not None and not evaluation_config.force_unconditional:
         class_grid_labels = _balanced_labels(
@@ -672,7 +673,7 @@ def run_checkpoint_evaluation(
         )
         artifact_paths["cfg_comparison_grid"] = str(cfg_grid_path.resolve())
 
-    snapshot_path = paths["artifacts"] / "reverse_process_snapshots.png"
+    snapshot_path = paths["artifacts"] / "diffusion_snapshots.png"
     plot_diffusion_snapshots(
         eval_model,
         scheduler,
@@ -696,6 +697,7 @@ def run_checkpoint_evaluation(
         amp_dtype=config.amp_dtype,
     )
     artifact_paths["reverse_process_snapshots"] = str(snapshot_path.resolve())
+    artifact_paths["diffusion_snapshots"] = str(snapshot_path.resolve())
 
     if evaluation_config.mode == "evaluate":
         nearest_neighbor_path = paths["artifacts"] / "nearest_neighbors.png"
@@ -727,7 +729,7 @@ def run_checkpoint_evaluation(
             "description": "Auxiliary paired denoising / reconstruction metrics. These are not primary generative metrics.",
             **paired_metrics,
         }
-        reconstruction_path = paths["artifacts"] / "reconstruction_preview.png"
+        reconstruction_path = paths["artifacts"] / "reconstructions.png"
         plot_diffusion_reconstructions(
             eval_model,
             scheduler,
@@ -740,6 +742,7 @@ def run_checkpoint_evaluation(
             num_images=min(8, effective_artifact_sample_count),
         )
         artifact_paths["reconstruction_preview"] = str(reconstruction_path.resolve())
+        artifact_paths["reconstructions"] = str(reconstruction_path.resolve())
 
     generative_metrics_payload: dict[str, Any] | None = None
     if evaluation_config.mode == "evaluate" and metric_backend is not None and reference_stats is not None:

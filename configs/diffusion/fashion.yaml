@@ -1,0 +1,9 @@
+inherits:
+  - base_legacy28_gray.yaml
+config_name: fashion
+dataset: fashion
+dataset_variant: fashion_28_gray_legacy
+epochs: 50
+batch_size: 128
+num_workers: 4
+eval_batch_size: 128

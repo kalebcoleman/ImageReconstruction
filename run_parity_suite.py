@@ -37,12 +37,14 @@ def _parse_seeds(values: list[int] | None, *, smoke: bool) -> tuple[int, ...]:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(description="Run the final parity study for MNIST, FashionMNIST, and CIFAR10.")
+    parser = argparse.ArgumentParser(
+        description="Run the final diffusion study for MNIST, FashionMNIST, and CIFAR10."
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     common_run = argparse.ArgumentParser(add_help=False)
     common_run.add_argument("--study-dir", type=Path, required=True, help="Root directory for the final-study outputs and registry.")
-    common_run.add_argument("--data-dir", type=Path, required=True, help="Dataset root shared by the parity recipes.")
+    common_run.add_argument("--data-dir", type=Path, required=True, help="Dataset root shared by the final-study recipes.")
     common_run.add_argument("--datasets", nargs="*", default=None, help="Datasets to include. Defaults to the final-study set: mnist fashion cifar10.")
     common_run.add_argument("--seeds", nargs="*", type=int, default=None, help="Seeds to run. Defaults to 1 2 3.")
     common_run.add_argument("--config-dir", type=Path, default=Path("configs/diffusion"))
@@ -53,7 +55,7 @@ def build_parser() -> argparse.ArgumentParser:
         help="Pass through to evaluate.py so missing pretrained metric-model weights can be downloaded during evaluation.",
     )
 
-    run_parser = subparsers.add_parser("run", parents=[common_run], help="Launch train/eval phases for the parity study.")
+    run_parser = subparsers.add_parser("run", parents=[common_run], help="Launch train/eval phases for the final diffusion study.")
     run_parser.add_argument("--phase", choices=("train", "eval", "both"), default="both")
     run_parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=False)
     run_parser.add_argument("--summarize", action=argparse.BooleanOptionalAction, default=True, help="Regenerate study summaries after execution.")

@@ -62,7 +62,7 @@ Notes:
 - `--timesteps` is the diffusion process length and still supports settings such as `500` and `1000`.
 - `--time_dim` is only the timestep embedding width inside the UNet.
 - `--beta_start` and `--beta_end` shape the linear schedule; the cosine schedule uses the standard improved-DDPM cosine curve.
-- The new diffusion default is `--diffusion_backbone adm`, which resolves to `64x64` and `3` channels unless you override them.
+- The bare CLI default is still `--diffusion_backbone adm`, which resolves to `64x64` and `3` channels unless you override them. The final-study configs below now choose dataset-appropriate backbones instead.
 - `--config` loads a YAML recipe first, then applies any explicit CLI flags on top of it.
 - The old diffusion path is still available through `--legacy-diffusion`; on MNIST/Fashion it resolves to native `28x28` grayscale by default.
 - `--prediction_type eps` preserves the earlier behavior. Use `--prediction_type v` for the stronger phase-2 objective.
@@ -70,47 +70,27 @@ Notes:
 - `--amp_dtype auto` prefers `bf16` on supported CUDA GPUs and falls back to `fp16` otherwise.
 - `ae`, `dae`, and `vae` remain MNIST/Fashion-only paths for now. CIFAR10 and ImageNet are diffusion-only in this phase.
 
-## Parity Protocol
+## Diffusion Study Recipes
 
-Phase 4 adds a locked recipe family under [`configs/diffusion/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/). The parity protocol is intended for fair cross-dataset comparison of the same pixel-space ADM diffusion family.
+Phase 4 now defaults to dataset-appropriate diffusion recipes under [`configs/diffusion/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/):
 
-Identical across the parity recipes:
+- `mnist` uses the legacy diffusion backbone at native `28x28` with `1` channel and grayscale preprocessing.
+- `fashion` uses the legacy diffusion backbone at native `28x28` with `1` channel and grayscale preprocessing.
+- `cifar10` uses the ADM diffusion backbone at `64x64` with `3` channels and natural-image preprocessing.
 
-- `image_size = 64`
-- `diffusion_channels = 3`
-- `diffusion_backbone = adm`
-- `diffusion_preprocessing = parity_64`
-- `prediction_type = v`
-- `schedule = cosine`
-- `ema_decay = 0.999`
-- `class_dropout_prob = 0.1`
-- `sampler = ddim`
-- `sampling_steps = 50`
-- `ddim_eta = 0.0`
-- `attention_resolutions = [16, 8]`
+Default full-study recipes:
 
-Allowed to differ across datasets:
+- [`configs/diffusion/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist.yaml)
+- [`configs/diffusion/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion.yaml)
+- [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
 
-- `batch_size`
-- `num_workers`
-- `epochs`
-- `eval_batch_size`
-- `data_dir`
-- `output_dir`
-- `run_name`
-- the concrete ImageNet subset/full-data realization behind `data_dir`
+Default smoke recipes:
 
-The parity recipes are:
+- [`configs/diffusion/smoke/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/mnist.yaml)
+- [`configs/diffusion/smoke/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/fashion.yaml)
+- [`configs/diffusion/smoke/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/cifar10.yaml)
 
-- [`configs/diffusion/base_adm64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_adm64.yaml)
-- [`configs/diffusion/mnist_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist_64.yaml)
-- [`configs/diffusion/fashion_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion_64.yaml)
-- [`configs/diffusion/cifar10_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10_64.yaml)
-- [`configs/diffusion/imagenet_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/imagenet_64.yaml)
-
-The lightweight smoke-test recipes live under [`configs/diffusion/smoke/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/). They keep the same ADM/parity preprocessing path and output schema, but reduce runtime with `1` epoch, `100` diffusion timesteps, fewer generated samples, smaller artifact grids, and smaller CFG comparison defaults.
-
-The ImageNet recipe is a protocol definition for `64x64` parity runs. It does not claim that the repo has already validated a full ImageNet benchmark result in this phase.
+The old strict `64x64` RGB ADM parity family is still available under [`configs/diffusion/experimental/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/experimental/). Those archived configs preserve the earlier protocol for comparison, but they are no longer the default final-study path because forcing MNIST and FashionMNIST through RGB `64x64` tensors produced avoidable artifacts.
 
 ## Final Study Runner
 
@@ -120,14 +100,22 @@ Phase 5 adds [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction
 - `fashion`
 - `cifar10`
 
+The script name is kept for compatibility, but the default study is now dataset-appropriate rather than strict architecture/input-shape parity.
+
 Default final-study behavior:
 
 - `3` seeds per dataset
-- deterministic run names like `parity_mnist_64_seed001`
+- deterministic run names like `study_mnist_seed001`
 - train/eval linkage recorded in `study_registry.json`
 - non-destructive safety checks for existing run directories
 - optional `--skip-existing` reuse for completed train/eval steps
 - summary regeneration after execution by default
+
+Study defaults by dataset:
+
+- `mnist`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
+- `fashion`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
+- `cifar10`: ADM diffusion, `64x64`, `3` channels, natural-image preprocessing
 
 The final-study runner does not replace [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) or [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py). It calls them with deterministic config/seed/run-name combinations.
 
@@ -135,7 +123,7 @@ Smoke-test behavior with `--smoke`:
 
 - uses the lightweight recipes under [`configs/diffusion/smoke/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/)
 - defaults to seed `1` when `--seeds` is omitted
-- uses distinct run names such as `parity_mnist_64_smoke_seed001`
+- uses distinct run names such as `study_mnist_smoke_seed001`
 - keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
 - refuses to mix smoke and full-study runs in the same `--study-dir`
 - if pretrained evaluation weights are not cached yet, rerun the eval-inclusive command with `--allow-model-download` once
@@ -149,7 +137,7 @@ python3 run_parity_suite.py plan \
   --phase both
 ```
 
-Quick smoke validation for MNIST:
+Quick MNIST legacy smoke train:
 
 ```bash
 python3 run_parity_suite.py run \
@@ -157,13 +145,10 @@ python3 run_parity_suite.py run \
   --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-mnist \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets mnist \
-  --phase both
-
-python3 run_parity_suite.py deliverables \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-mnist
+  --phase train
 ```
 
-Quick smoke validation for FashionMNIST:
+Quick FashionMNIST legacy smoke train:
 
 ```bash
 python3 run_parity_suite.py run \
@@ -171,13 +156,10 @@ python3 run_parity_suite.py run \
   --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-fashion \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets fashion \
-  --phase both
-
-python3 run_parity_suite.py deliverables \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-fashion
+  --phase train
 ```
 
-Quick smoke validation for CIFAR10:
+Quick CIFAR10 ADM smoke train:
 
 ```bash
 python3 run_parity_suite.py run \
@@ -185,13 +167,21 @@ python3 run_parity_suite.py run \
   --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets cifar10 \
-  --phase both
-
-python3 run_parity_suite.py deliverables \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10
+  --phase train
 ```
 
-Run the unchanged full final study:
+Quick all-dataset smoke train:
+
+```bash
+python3 run_parity_suite.py run \
+  --smoke \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-all \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --datasets mnist fashion cifar10 \
+  --phase train
+```
+
+Full final study:
 
 ```bash
 python3 run_parity_suite.py run \
@@ -302,9 +292,10 @@ Default deliverables bundle layout:
 ├── deliverables_bundle.yaml
 ├── deliverables_bundle.md
 ├── figures/
-│   ├── mnist_best_generated_samples.png
+│   ├── mnist_generated_samples.png
 │   ├── mnist_cfg_comparison.png
-│   ├── mnist_reverse_process_snapshots.png
+│   ├── mnist_diffusion_snapshots.png
+│   ├── mnist_reconstructions.png
 │   ├── mnist_nearest_neighbors.png
 │   └── ...
 ├── tables/
@@ -488,38 +479,38 @@ python3 train.py \
   --epochs 5
 ```
 
-Standardized parity runs:
+Dataset-appropriate default recipe runs:
 
 MNIST:
 
 ```bash
-python3 train.py --config configs/diffusion/mnist_64.yaml \
+python3 train.py --config configs/diffusion/mnist.yaml \
   --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
 ```
 
 FashionMNIST:
 
 ```bash
-python3 train.py --config configs/diffusion/fashion_64.yaml \
+python3 train.py --config configs/diffusion/fashion.yaml \
   --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
 ```
 
 CIFAR10:
 
 ```bash
-python3 train.py --config configs/diffusion/cifar10_64.yaml \
+python3 train.py --config configs/diffusion/cifar10.yaml \
   --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
 ```
 
-ImageNet parity protocol:
+Archived strict `64x64` RGB parity recipes:
 
 ```bash
-python3 train.py --config configs/diffusion/imagenet_64.yaml \
+python3 train.py --config configs/diffusion/experimental/mnist_64.yaml \
   --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+  --output-dir /scratch/$USER/image-reconstruction-runs/experimental-parity
 ```
 
 ## Checkpoint Evaluation
@@ -574,7 +565,8 @@ Notes:
 - `evaluate.py` defaults to saving results under `<training_run>/evaluations/`.
 - Real-image FID reference stats are cached under `<output_dir>/_reference_stats/` unless you override `--reference-stats-dir`.
 - The same dataset/image-size/channel preprocessing signature is used for both cached real stats and generated images.
-- When a checkpoint was trained from a parity recipe, `evaluate.py` can reuse the checkpoint’s saved evaluation defaults such as `eval_batch_size`, `num_generated_samples`, and CFG comparison scales.
+- When a checkpoint was trained from a study recipe, `evaluate.py` can reuse the checkpoint’s saved evaluation defaults such as `eval_batch_size`, `num_generated_samples`, and CFG comparison scales.
+- Grayscale checkpoints stay grayscale during training and sampling; grayscale-to-RGB conversion happens only inside the metric backends when FID, IS, or LPIPS need RGB inputs.
 - If the required torchvision model weights are not already cached locally, rerun on a login node with `--allow-model-download` once, then use the cached weights on compute nodes.
 
 ## Aggregation
@@ -585,8 +577,8 @@ Example:
 
 ```bash
 python3 aggregate_results.py \
-  /scratch/$USER/image-reconstruction-runs/parity \
-  --output-dir /scratch/$USER/image-reconstruction-runs/parity_reports/final_table
+  /scratch/$USER/image-reconstruction-runs/final-study \
+  --output-dir /scratch/$USER/image-reconstruction-runs/final-study-reports/final_table
 ```
 
 This writes:

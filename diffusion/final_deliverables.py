@@ -11,9 +11,10 @@ from diffusion.reporting import save_manifest_bundle
 
 
 ARTIFACT_EXPORT_NAMES: dict[str, str] = {
-    "generated_sample_grid": "best_generated_samples",
+    "generated_sample_grid": "generated_samples",
     "cfg_comparison_grid": "cfg_comparison",
-    "reverse_process_snapshots": "reverse_process_snapshots",
+    "diffusion_snapshots": "diffusion_snapshots",
+    "reconstructions": "reconstructions",
     "nearest_neighbor_grid": "nearest_neighbors",
 }
 
@@ -62,9 +63,13 @@ def build_best_run_rows(selection_payload: dict[str, dict[str, dict[str, Any]]])
                 "evaluation_dir": best.get("evaluation_dir"),
                 "metrics_path": best.get("metrics_path"),
                 "generated_sample_grid": best.get("generated_sample_grid"),
+                "generated_samples": best.get("generated_samples") or best.get("generated_sample_grid"),
                 "cfg_comparison_grid": best.get("cfg_comparison_grid"),
-                "reverse_process_snapshots": best.get("reverse_process_snapshots"),
+                "diffusion_snapshots": best.get("diffusion_snapshots") or best.get("reverse_process_snapshots"),
+                "reverse_process_snapshots": best.get("diffusion_snapshots") or best.get("reverse_process_snapshots"),
                 "nearest_neighbor_grid": best.get("nearest_neighbor_grid"),
+                "reconstructions": best.get("reconstructions") or best.get("reconstruction_preview"),
+                "reconstruction_preview": best.get("reconstructions") or best.get("reconstruction_preview"),
             }
         )
     return rows
@@ -151,16 +156,15 @@ def build_analysis_summary_markdown(
         f"- `study_dir`: `{study_dir.resolve()}`",
         "",
         "## Experimental Setup",
-        "- Pixel-space ADM diffusion parity study on MNIST, FashionMNIST, and CIFAR10.",
-        "- Training runs executed through `train.py` with locked parity recipes.",
+        "- Dataset-appropriate diffusion study on MNIST, FashionMNIST, and CIFAR10.",
+        "- MNIST and FashionMNIST use the legacy 28x28 grayscale diffusion baseline by default.",
+        "- CIFAR10 uses the ADM 64x64 RGB diffusion path with natural-image preprocessing.",
         "- Checkpoint-only evaluation executed through `evaluate.py`.",
         "",
-        "## Parity Protocol",
-        "- Common image size: `64x64`",
-        "- Common channels: `3`",
-        "- Common backbone family: `ADM-style diffusion`",
-        "- Common prediction target: `v`",
-        "- Common sampler default: `DDIM-50`",
+        "## Study Defaults",
+        "- `mnist`: legacy backbone, `28x28`, `1` channel, grayscale preprocessing.",
+        "- `fashion`: legacy backbone, `28x28`, `1` channel, grayscale preprocessing.",
+        "- `cifar10`: ADM backbone, `64x64`, `3` channels, natural-image preprocessing.",
         "",
         "## Main Findings By Dataset",
     ]
@@ -189,11 +193,12 @@ def build_analysis_summary_markdown(
         [
             "",
             "## CFG Observations",
-            "- Review the exported CFG comparison grids for each dataset.",
+            "- Review the exported CFG comparison grids for CIFAR10 or any other explicitly conditional ADM runs.",
+            "- Legacy grayscale checkpoints keep `guidance_scale=1.0` by default, so CFG is not a main comparison axis there.",
             "- [Add qualitative CFG observations here.]",
             "",
             "## DDPM vs DDIM Observations",
-            "- The final parity protocol uses DDIM for evaluation by default.",
+            "- The default study recipes use DDIM for evaluation artifacts by default.",
             "- If DDPM comparisons were run separately, add them here with explicit commands and artifacts.",
             "",
             "## Limitations",
@@ -202,7 +207,7 @@ def build_analysis_summary_markdown(
             "- [Add dataset- or compute-specific limitations here.]",
             "",
             "## Future Work",
-            "- Explore broader ablations only after preserving the locked parity protocol as a baseline.",
+            "- Explore broader ablations only after preserving the dataset-appropriate defaults as a baseline.",
             "- [Add post-course extensions here.]",
             "",
             "## Best Artifact References",
@@ -212,7 +217,8 @@ def build_analysis_summary_markdown(
         lines.append(
             f"- `{row['dataset']}`: samples=`{row['generated_sample_grid']}`, "
             f"cfg=`{row['cfg_comparison_grid']}`, "
-            f"snapshots=`{row['reverse_process_snapshots']}`, "
+            f"snapshots=`{row['diffusion_snapshots']}`, "
+            f"reconstructions=`{row['reconstructions']}`, "
             f"nearest=`{row['nearest_neighbor_grid']}`"
         )
     lines.append("")

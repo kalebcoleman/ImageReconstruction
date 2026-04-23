@@ -4,6 +4,7 @@ from dataclasses import asdict
 from pathlib import Path
 import tempfile
 
+import pytest
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
@@ -69,36 +70,55 @@ def dummy_metric_backend_factory(
     return DummyMetricBackend()
 
 
-def make_dummy_loader() -> DataLoader:
-    images = torch.rand(6, 3, 64, 64) * 2.0 - 1.0
+def make_dummy_loader(*, channels: int, image_size: int) -> DataLoader:
+    images = torch.rand(6, channels, image_size, image_size) * 2.0 - 1.0
     labels = torch.tensor([0, 1, 2, 3, 4, 5], dtype=torch.long) % 10
     return DataLoader(TensorDataset(images, labels), batch_size=2, shuffle=False)
 
 
-def make_dummy_checkpoint(tmp_path: Path) -> Path:
+def make_dummy_checkpoint(
+    tmp_path: Path,
+    *,
+    dataset: str,
+    diffusion_backbone: str,
+    image_size: int,
+    diffusion_channels: int,
+    config_name: str,
+    protocol_name: str,
+    dataset_variant: str,
+    diffusion_preprocessing: str,
+    prediction_type: str,
+    guidance_scale: float,
+    eval_cfg_comparison_scales: tuple[float, ...] | None,
+) -> Path:
     config = ExperimentConfig(
         model="diffusion",
-        dataset="mnist",
+        dataset=dataset,
+        config_name=config_name,
+        protocol_name=protocol_name,
+        dataset_variant=dataset_variant,
         data_dir=tmp_path / "data",
         output_dir=tmp_path / "outputs",
         epochs=1,
         batch_size=2,
         num_workers=0,
         download=False,
-        diffusion_backbone="adm",
-        image_size=64,
-        diffusion_channels=3,
+        diffusion_backbone=diffusion_backbone,
+        diffusion_preprocessing=diffusion_preprocessing,
+        image_size=image_size,
+        diffusion_channels=diffusion_channels,
         dataset_num_classes=10,
         timesteps=4,
         base_channels=8,
         time_dim=32,
         num_res_blocks=1,
-        prediction_type="eps",
+        prediction_type=prediction_type,
         sampler="ddim",
         sampling_steps=4,
-        guidance_scale=1.0,
+        guidance_scale=guidance_scale,
         amp_dtype="none",
         class_dropout_prob=0.1,
+        eval_cfg_comparison_scales=eval_cfg_comparison_scales,
     )
     model, _ = instantiate_model(config, torch.device("cpu"))
     checkpoint_path = tmp_path / "checkpoints" / "best.pt"
@@ -169,7 +189,10 @@ def test_reference_stats_cache_reuse(monkeypatch, tmp_path: Path) -> None:
         num_res_blocks=1,
         amp_dtype="none",
     )
-    monkeypatch.setattr("diffusion.eval_pipeline._build_loader", lambda *args, **kwargs: make_dummy_loader())
+    monkeypatch.setattr(
+        "diffusion.eval_pipeline._build_loader",
+        lambda *args, **kwargs: make_dummy_loader(channels=3, image_size=64),
+    )
 
     stats_dir = tmp_path / "reference_stats"
     stats, stats_path = _load_or_compute_reference_stats(
@@ -194,9 +217,73 @@ def test_reference_stats_cache_reuse(monkeypatch, tmp_path: Path) -> None:
     assert cached_stats.count == stats.count
 
 
-def test_checkpoint_only_evaluation_path(monkeypatch, tmp_path: Path) -> None:
-    checkpoint_path = make_dummy_checkpoint(tmp_path)
-    monkeypatch.setattr("diffusion.eval_pipeline._build_loader", lambda *args, **kwargs: make_dummy_loader())
+@pytest.mark.parametrize(
+    ("dataset", "diffusion_backbone", "image_size", "diffusion_channels", "config_name", "protocol_name", "dataset_variant", "diffusion_preprocessing", "prediction_type", "guidance_scale", "eval_cfg_comparison_scales", "expect_cfg_grid"),
+    [
+        (
+            "mnist",
+            "legacy",
+            28,
+            1,
+            "mnist",
+            "legacy28_gray_v1",
+            "mnist_28_gray_legacy",
+            "default",
+            "eps",
+            1.0,
+            tuple(),
+            False,
+        ),
+        (
+            "cifar10",
+            "adm",
+            64,
+            3,
+            "cifar10",
+            "adm64_rgb_v1",
+            "cifar10_64_rgb_adm",
+            "default",
+            "v",
+            3.0,
+            (0.0, 3.0),
+            True,
+        ),
+    ],
+)
+def test_checkpoint_only_evaluation_path_supports_legacy_and_adm(
+    monkeypatch,
+    tmp_path: Path,
+    dataset: str,
+    diffusion_backbone: str,
+    image_size: int,
+    diffusion_channels: int,
+    config_name: str,
+    protocol_name: str,
+    dataset_variant: str,
+    diffusion_preprocessing: str,
+    prediction_type: str,
+    guidance_scale: float,
+    eval_cfg_comparison_scales: tuple[float, ...],
+    expect_cfg_grid: bool,
+) -> None:
+    checkpoint_path = make_dummy_checkpoint(
+        tmp_path,
+        dataset=dataset,
+        diffusion_backbone=diffusion_backbone,
+        image_size=image_size,
+        diffusion_channels=diffusion_channels,
+        config_name=config_name,
+        protocol_name=protocol_name,
+        dataset_variant=dataset_variant,
+        diffusion_preprocessing=diffusion_preprocessing,
+        prediction_type=prediction_type,
+        guidance_scale=guidance_scale,
+        eval_cfg_comparison_scales=eval_cfg_comparison_scales,
+    )
+    monkeypatch.setattr(
+        "diffusion.eval_pipeline._build_loader",
+        lambda *args, **kwargs: make_dummy_loader(channels=diffusion_channels, image_size=image_size),
+    )
 
     payload = run_checkpoint_evaluation(
         CheckpointEvaluationConfig(
@@ -216,18 +303,45 @@ def test_checkpoint_only_evaluation_path(monkeypatch, tmp_path: Path) -> None:
 
     assert Path(payload["metrics_path"]).exists()
     assert Path(payload["summary_path"]).exists()
+    assert payload["dataset"] == dataset
+    assert payload["config_name"] == config_name
+    assert payload["protocol_name"] == protocol_name
+    assert payload["diffusion_backbone"] == diffusion_backbone
+    assert payload["image_size"] == image_size
+    assert payload["diffusion_channels"] == diffusion_channels
+    assert payload["diffusion_preprocessing"] == diffusion_preprocessing
     assert payload["generative_metrics"] is not None
     assert "fid" in payload["generative_metrics"]
     assert "inception_score_mean" in payload["generative_metrics"]
     assert "lpips_diversity" in payload["generative_metrics"]
     assert payload["paired_metrics"] is not None
     assert "generated_sample_grid" in payload["artifacts"]
+    assert "generated_samples" in payload["artifacts"]
+    assert Path(payload["artifacts"]["generated_samples"]).exists()
+    assert "diffusion_snapshots" in payload["artifacts"]
+    assert Path(payload["artifacts"]["diffusion_snapshots"]).exists()
+    assert "reconstructions" in payload["artifacts"]
+    assert Path(payload["artifacts"]["reconstructions"]).exists()
     assert "nearest_neighbor_grid" in payload["artifacts"]
     assert Path(payload["artifacts"]["nearest_neighbor_grid"]).exists()
+    assert ("cfg_comparison_grid" in payload["artifacts"]) is expect_cfg_grid
 
 
 def test_ddpm_and_ddim_checkpoint_sampling_paths(monkeypatch, tmp_path: Path) -> None:
-    checkpoint_path = make_dummy_checkpoint(tmp_path)
+    checkpoint_path = make_dummy_checkpoint(
+        tmp_path,
+        dataset="cifar10",
+        diffusion_backbone="adm",
+        image_size=64,
+        diffusion_channels=3,
+        config_name="cifar10",
+        protocol_name="adm64_rgb_v1",
+        dataset_variant="cifar10_64_rgb_adm",
+        diffusion_preprocessing="default",
+        prediction_type="v",
+        guidance_scale=3.0,
+        eval_cfg_comparison_scales=(0.0, 3.0),
+    )
 
     payload_ddpm = run_checkpoint_evaluation(
         CheckpointEvaluationConfig(
@@ -278,7 +392,10 @@ def test_nearest_neighbor_artifact_generation(tmp_path: Path, monkeypatch) -> No
         time_dim=32,
         num_res_blocks=1,
     )
-    monkeypatch.setattr("diffusion.eval_pipeline._build_loader", lambda *args, **kwargs: make_dummy_loader())
+    monkeypatch.setattr(
+        "diffusion.eval_pipeline._build_loader",
+        lambda *args, **kwargs: make_dummy_loader(channels=3, image_size=64),
+    )
     generated_images = torch.rand(2, 3, 64, 64)
     save_path = tmp_path / "nearest_neighbors.png"
 

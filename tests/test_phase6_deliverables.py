@@ -35,7 +35,26 @@ def fake_runner_with_artifacts(command: list[str], cwd: Path) -> None:
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_path.write_text("checkpoint", encoding="utf-8")
         (run_dir / "metrics.json").write_text(json.dumps({"dataset": dataset}), encoding="utf-8")
-        (run_dir / "run_manifest.json").write_text(json.dumps({"run_name": run_name}), encoding="utf-8")
+        (run_dir / "run_manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_name": run_name,
+                    "dataset": dataset,
+                    "config_name": recipe.values["config_name"],
+                    "protocol_name": recipe.values["protocol_name"],
+                    "dataset_variant": recipe.values["dataset_variant"],
+                    "image_size": recipe.values["image_size"],
+                    "diffusion_channels": recipe.values["diffusion_channels"],
+                    "diffusion_preprocessing": recipe.values["diffusion_preprocessing"],
+                    "diffusion_backbone": recipe.values["diffusion_backbone"],
+                    "prediction_type": recipe.values["prediction_type"],
+                    "sampler": recipe.values["sampler"],
+                    "sampling_steps": recipe.values["sampling_steps"],
+                    "guidance_scale": recipe.values["guidance_scale"],
+                }
+            ),
+            encoding="utf-8",
+        )
         return
 
     if command[1] == "evaluate.py":
@@ -45,33 +64,38 @@ def fake_runner_with_artifacts(command: list[str], cwd: Path) -> None:
         eval_dir = run_root / "evaluations" / run_name
         eval_dir.mkdir(parents=True, exist_ok=True)
         dataset = run_root.parent.parent.name
+        run_manifest = json.loads((run_root / "run_manifest.json").read_text(encoding="utf-8"))
         seed_fragment = run_root.name.split("_seed")[-1]
         seed = int(seed_fragment) if seed_fragment.isdigit() else 0
         artifacts = {
-            "generated_sample_grid": eval_dir / "generated.png",
+            "generated_sample_grid": eval_dir / "generated_samples.png",
+            "generated_samples": eval_dir / "generated_samples.png",
             "cfg_comparison_grid": eval_dir / "cfg.png",
-            "reverse_process_snapshots": eval_dir / "snapshots.png",
+            "diffusion_snapshots": eval_dir / "diffusion_snapshots.png",
+            "reverse_process_snapshots": eval_dir / "diffusion_snapshots.png",
             "nearest_neighbor_grid": eval_dir / "nn.png",
+            "reconstructions": eval_dir / "reconstructions.png",
+            "reconstruction_preview": eval_dir / "reconstructions.png",
         }
         for artifact_path in artifacts.values():
             artifact_path.write_text(f"{dataset}:{artifact_path.name}", encoding="utf-8")
         metrics_payload = {
             "dataset": dataset,
-            "config_name": run_root.name.split("_seed")[0].removeprefix("parity_"),
-            "protocol_name": "adm64_parity_v1",
-            "dataset_variant": f"{dataset}_64_rgb_parity",
+            "config_name": run_manifest["config_name"],
+            "protocol_name": run_manifest["protocol_name"],
+            "dataset_variant": run_manifest["dataset_variant"],
             "seed": seed,
             "checkpoint_path": str(checkpoint_path.resolve()),
             "evaluation_dir": str(eval_dir.resolve()),
             "metrics_path": str((eval_dir / "metrics.json").resolve()),
-            "image_size": 64,
-            "diffusion_channels": 3,
-            "diffusion_preprocessing": "parity_64",
-            "diffusion_backbone": "adm",
-            "prediction_type": "v",
-            "sampler": "ddim",
-            "sampling_steps": 50,
-            "guidance_scale": 3.0,
+            "image_size": run_manifest["image_size"],
+            "diffusion_channels": run_manifest["diffusion_channels"],
+            "diffusion_preprocessing": run_manifest["diffusion_preprocessing"],
+            "diffusion_backbone": run_manifest["diffusion_backbone"],
+            "prediction_type": run_manifest["prediction_type"],
+            "sampler": run_manifest["sampler"],
+            "sampling_steps": run_manifest["sampling_steps"],
+            "guidance_scale": run_manifest["guidance_scale"],
             "model_parameters": 123456,
             "generative_metrics": {
                 "fid": float(seed + 10),
@@ -155,7 +179,7 @@ def test_markdown_summary_generation_contains_required_sections(tmp_path: Path) 
     )
 
     assert "## Experimental Setup" in markdown
-    assert "## Parity Protocol" in markdown
+    assert "## Study Defaults" in markdown
     assert "## Main Findings By Dataset" in markdown
     assert "## CFG Observations" in markdown
     assert "## Limitations" in markdown

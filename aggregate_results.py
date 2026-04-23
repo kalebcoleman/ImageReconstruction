@@ -40,6 +40,9 @@ def build_aggregate_row(payload: dict[str, Any], metrics_path: Path) -> dict[str
     generative_metrics = payload.get("generative_metrics") or {}
     paired_metrics = payload.get("paired_metrics") or {}
     artifacts = payload.get("artifacts") or {}
+    generated_samples = artifacts.get("generated_sample_grid") or artifacts.get("generated_samples")
+    diffusion_snapshots = artifacts.get("diffusion_snapshots") or artifacts.get("reverse_process_snapshots")
+    reconstructions = artifacts.get("reconstructions") or artifacts.get("reconstruction_preview")
 
     return {
         "dataset": payload.get("dataset"),
@@ -65,10 +68,14 @@ def build_aggregate_row(payload: dict[str, Any], metrics_path: Path) -> dict[str
         "lpips_diversity": generative_metrics.get("lpips_diversity"),
         "psnr": paired_metrics.get("psnr"),
         "ssim": paired_metrics.get("ssim"),
-        "generated_sample_grid": artifacts.get("generated_sample_grid"),
+        "generated_sample_grid": generated_samples,
+        "generated_samples": generated_samples,
         "cfg_comparison_grid": artifacts.get("cfg_comparison_grid"),
-        "reverse_process_snapshots": artifacts.get("reverse_process_snapshots"),
+        "reverse_process_snapshots": diffusion_snapshots,
+        "diffusion_snapshots": diffusion_snapshots,
         "nearest_neighbor_grid": artifacts.get("nearest_neighbor_grid"),
+        "reconstruction_preview": reconstructions,
+        "reconstructions": reconstructions,
     }
 
 

@@ -27,9 +27,6 @@ SMOKE_EVAL_COMMAND_OVERRIDES: tuple[str, ...] = (
     "64",
     "--artifact-sample-count",
     "4",
-    "--cfg-comparison-scales",
-    "0",
-    "3",
     "--nearest-neighbor-count",
     "4",
     "--nearest-neighbor-reference-limit",
@@ -84,19 +81,27 @@ def detect_git_commit(repo_root: Path) -> str | None:
 def build_study_run_name(config_name: str, seed: int) -> str:
     """Return the deterministic run name used by the final-study suite."""
 
-    return f"parity_{config_name}_seed{seed:03d}"
+    return f"study_{config_name}_seed{seed:03d}"
 
 
 def build_recipe_path(config_dir: Path, dataset: str) -> Path:
     normalized_dataset = normalize_dataset_name(dataset)
-    recipe_path = config_dir / f"{normalized_dataset}_64.yaml"
-    if not recipe_path.exists():
-        raise FileNotFoundError(f"Could not find a parity recipe for {dataset} at {recipe_path}")
-    return recipe_path
+    candidate_names = (
+        f"{normalized_dataset}.yaml",
+        f"{normalized_dataset}_64.yaml",
+    )
+    for candidate_name in candidate_names:
+        recipe_path = config_dir / candidate_name
+        if recipe_path.exists():
+            return recipe_path
+    raise FileNotFoundError(
+        f"Could not find a study recipe for {dataset} in {config_dir}. "
+        f"Tried {list(candidate_names)}."
+    )
 
 
 def resolve_study_config_dir(config_dir: Path, *, smoke: bool) -> Path:
-    """Map the default parity recipe directory to the smoke recipe directory when requested."""
+    """Map the default study recipe directory to the smoke recipe directory when requested."""
 
     if smoke and config_dir == DEFAULT_STUDY_CONFIG_DIR:
         return SMOKE_STUDY_CONFIG_DIR
@@ -227,7 +232,7 @@ def save_registry(study_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
     manifest_paths = save_manifest_bundle(
         study_dir,
         basename="study_registry",
-        title="Parity Study Registry",
+        title="Final Diffusion Study Registry",
         payload=payload,
     )
     return manifest_paths
@@ -269,7 +274,7 @@ def _ensure_study_mode_compatible(registry: dict[str, Any], *, plans: list[Study
     inferred_modes = {_infer_entry_study_mode(entry) for entry in entries}
     if len(inferred_modes) != 1:
         raise ValueError(
-            f"Study directory {study_dir} already contains mixed parity outputs. "
+            f"Study directory {study_dir} already contains mixed study outputs. "
             "Keep smoke and full studies in separate study directories."
         )
     inferred_mode = next(iter(inferred_modes))
@@ -480,9 +485,9 @@ def write_study_plan_files(
     slurm_path = plan_dir / "planned_array.slurm"
     slurm_lines = [
         "#!/bin/bash",
-        "#SBATCH --job-name=parity-suite",
+        "#SBATCH --job-name=diffusion-study",
         f"#SBATCH --array=0-{max(len(commands) - 1, 0)}",
-        "#SBATCH --output=logs/parity-suite-%A_%a.out",
+        "#SBATCH --output=logs/diffusion-study-%A_%a.out",
         "",
         f"mapfile -t COMMANDS < {commands_path}",
         'eval "${COMMANDS[$SLURM_ARRAY_TASK_ID]}"',
@@ -499,7 +504,7 @@ def write_study_plan_files(
     manifest_paths = save_manifest_bundle(
         plan_dir,
         basename="study_plan",
-        title="Parity Study Plan",
+        title="Final Diffusion Study Plan",
         payload=manifest_payload,
     )
     return {
@@ -645,9 +650,12 @@ def generate_final_study_summaries(
         summary_row["best_fid"] = best.get("fid")
         summary_row["best_evaluation_dir"] = best.get("evaluation_dir")
         summary_row["best_generated_sample_grid"] = best.get("generated_sample_grid")
+        summary_row["best_generated_samples"] = best.get("generated_samples") or best.get("generated_sample_grid")
         summary_row["best_cfg_comparison_grid"] = best.get("cfg_comparison_grid")
-        summary_row["best_reverse_process_snapshots"] = best.get("reverse_process_snapshots")
+        summary_row["best_diffusion_snapshots"] = best.get("diffusion_snapshots") or best.get("reverse_process_snapshots")
+        summary_row["best_reverse_process_snapshots"] = best.get("diffusion_snapshots") or best.get("reverse_process_snapshots")
         summary_row["best_nearest_neighbor_grid"] = best.get("nearest_neighbor_grid")
+        summary_row["best_reconstructions"] = best.get("reconstructions") or best.get("reconstruction_preview")
 
     summaries_root = resolved_study_dir / "summaries"
     per_run_dir = summaries_root / "per_run"
@@ -661,7 +669,7 @@ def generate_final_study_summaries(
     per_run_manifest = save_manifest_bundle(
         per_run_dir,
         basename="per_run_summary",
-        title="Per-Run Parity Study Summary",
+        title="Per-Run Final Diffusion Study Summary",
         payload={"rows": per_run_rows},
     )
 
@@ -669,7 +677,7 @@ def generate_final_study_summaries(
     per_dataset_manifest = save_manifest_bundle(
         per_dataset_dir,
         basename="per_dataset_summary",
-        title="Per-Dataset Parity Study Summary",
+        title="Per-Dataset Final Diffusion Study Summary",
         payload={"rows": per_dataset_rows},
     )
 
@@ -696,14 +704,31 @@ def generate_final_study_summaries(
     _save_csv(selections_dir / "best_runs.csv", selection_csv_rows)
 
     report_lines = [
-        "# Final Parity Study Summary",
+        "# Final Diffusion Study Summary",
         "",
         f"- `study_dir`: `{resolved_study_dir}`",
         f"- `run_count`: `{len(per_run_rows)}`",
         f"- `evaluation_count`: `{len(evaluation_rows)}`",
         "",
-        "## Per-Dataset Means",
+        "## Dataset Defaults",
     ]
+    dataset_defaults: dict[str, dict[str, Any]] = {}
+    for row in evaluation_rows:
+        dataset = str(row.get("dataset") or "")
+        if dataset and dataset not in dataset_defaults:
+            dataset_defaults[dataset] = row
+    for dataset, row in sorted(dataset_defaults.items()):
+        report_lines.append(
+            f"- `{dataset}`: backbone=`{row.get('diffusion_backbone')}` "
+            f"shape=`{row.get('diffusion_channels')}x{row.get('image_size')}x{row.get('image_size')}` "
+            f"preproc=`{row.get('diffusion_preprocessing')}`"
+        )
+    report_lines.extend(
+        [
+            "",
+            "## Per-Dataset Means",
+        ]
+    )
     for row in per_dataset_rows:
         report_lines.append(
             f"- `{row['dataset']}`: FID mean=`{row['fid_mean']}` std=`{row['fid_std']}` "

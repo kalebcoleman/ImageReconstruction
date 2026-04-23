@@ -42,7 +42,26 @@ def fake_runner(command: list[str], cwd: Path) -> None:
         checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
         checkpoint_path.write_text("checkpoint", encoding="utf-8")
         (run_dir / "metrics.json").write_text(json.dumps({"dataset": dataset}), encoding="utf-8")
-        (run_dir / "run_manifest.json").write_text(json.dumps({"run_name": run_name}), encoding="utf-8")
+        (run_dir / "run_manifest.json").write_text(
+            json.dumps(
+                {
+                    "run_name": run_name,
+                    "dataset": dataset,
+                    "config_name": recipe.values["config_name"],
+                    "protocol_name": recipe.values["protocol_name"],
+                    "dataset_variant": recipe.values["dataset_variant"],
+                    "image_size": recipe.values["image_size"],
+                    "diffusion_channels": recipe.values["diffusion_channels"],
+                    "diffusion_preprocessing": recipe.values["diffusion_preprocessing"],
+                    "diffusion_backbone": recipe.values["diffusion_backbone"],
+                    "prediction_type": recipe.values["prediction_type"],
+                    "sampler": recipe.values["sampler"],
+                    "sampling_steps": recipe.values["sampling_steps"],
+                    "guidance_scale": recipe.values["guidance_scale"],
+                }
+            ),
+            encoding="utf-8",
+        )
         return
 
     if command[1] == "evaluate.py":
@@ -52,25 +71,26 @@ def fake_runner(command: list[str], cwd: Path) -> None:
         eval_dir = run_root / "evaluations" / run_name
         eval_dir.mkdir(parents=True, exist_ok=True)
         dataset = run_root.parent.parent.name
+        run_manifest = json.loads((run_root / "run_manifest.json").read_text(encoding="utf-8"))
         seed_fragment = run_root.name.split("_seed")[-1]
         seed = int(seed_fragment) if seed_fragment.isdigit() else 0
         metrics_payload = {
             "dataset": dataset,
-            "config_name": run_root.name.split("_seed")[0].removeprefix("parity_"),
-            "protocol_name": "adm64_parity_v1",
-            "dataset_variant": f"{dataset}_64_rgb_parity",
+            "config_name": run_manifest["config_name"],
+            "protocol_name": run_manifest["protocol_name"],
+            "dataset_variant": run_manifest["dataset_variant"],
             "seed": seed,
             "checkpoint_path": str(checkpoint_path.resolve()),
             "evaluation_dir": str(eval_dir.resolve()),
             "metrics_path": str((eval_dir / "metrics.json").resolve()),
-            "image_size": 64,
-            "diffusion_channels": 3,
-            "diffusion_preprocessing": "parity_64",
-            "diffusion_backbone": "adm",
-            "prediction_type": "v",
-            "sampler": "ddim",
-            "sampling_steps": 50,
-            "guidance_scale": 3.0,
+            "image_size": run_manifest["image_size"],
+            "diffusion_channels": run_manifest["diffusion_channels"],
+            "diffusion_preprocessing": run_manifest["diffusion_preprocessing"],
+            "diffusion_backbone": run_manifest["diffusion_backbone"],
+            "prediction_type": run_manifest["prediction_type"],
+            "sampler": run_manifest["sampler"],
+            "sampling_steps": run_manifest["sampling_steps"],
+            "guidance_scale": run_manifest["guidance_scale"],
             "model_parameters": 123456,
             "generative_metrics": {
                 "fid": float(seed + 10),
@@ -83,10 +103,14 @@ def fake_runner(command: list[str], cwd: Path) -> None:
                 "ssim": 0.8,
             },
             "artifacts": {
-                "generated_sample_grid": str((eval_dir / "generated.png").resolve()),
+                "generated_sample_grid": str((eval_dir / "generated_samples.png").resolve()),
+                "generated_samples": str((eval_dir / "generated_samples.png").resolve()),
                 "cfg_comparison_grid": str((eval_dir / "cfg.png").resolve()),
-                "reverse_process_snapshots": str((eval_dir / "snapshots.png").resolve()),
+                "diffusion_snapshots": str((eval_dir / "diffusion_snapshots.png").resolve()),
+                "reverse_process_snapshots": str((eval_dir / "diffusion_snapshots.png").resolve()),
                 "nearest_neighbor_grid": str((eval_dir / "nn.png").resolve()),
+                "reconstructions": str((eval_dir / "reconstructions.png").resolve()),
+                "reconstruction_preview": str((eval_dir / "reconstructions.png").resolve()),
             },
         }
         (eval_dir / "metrics.json").write_text(json.dumps(metrics_payload, indent=2), encoding="utf-8")
@@ -105,7 +129,36 @@ def test_build_study_plans_defaults_and_multi_seed_resolution(tmp_path: Path) ->
     assert len(plans) == len(FINAL_STUDY_DATASETS) * len(DEFAULT_STUDY_SEEDS)
     assert {plan.dataset for plan in plans} == set(FINAL_STUDY_DATASETS)
     assert {plan.seed for plan in plans} == set(DEFAULT_STUDY_SEEDS)
-    assert all(plan.run_name.startswith("parity_") for plan in plans)
+    assert all(plan.run_name.startswith("study_") for plan in plans)
+
+
+def test_build_study_plans_choose_dataset_appropriate_configs(tmp_path: Path) -> None:
+    plans = build_study_plans(
+        study_dir=tmp_path / "study",
+        data_dir=tmp_path / "data",
+        datasets=("mnist", "fashion", "cifar10"),
+        seeds=(1,),
+    )
+
+    by_dataset = {plan.dataset: plan for plan in plans}
+    assert str(by_dataset["mnist"].recipe_path).endswith("configs/diffusion/mnist.yaml")
+    assert str(by_dataset["fashion"].recipe_path).endswith("configs/diffusion/fashion.yaml")
+    assert str(by_dataset["cifar10"].recipe_path).endswith("configs/diffusion/cifar10.yaml")
+
+
+def test_build_smoke_study_plans_choose_dataset_appropriate_configs(tmp_path: Path) -> None:
+    plans = build_study_plans(
+        study_dir=tmp_path / "study",
+        data_dir=tmp_path / "data",
+        datasets=("mnist", "fashion", "cifar10"),
+        seeds=(1,),
+        smoke=True,
+    )
+
+    by_dataset = {plan.dataset: plan for plan in plans}
+    assert str(by_dataset["mnist"].recipe_path).endswith("configs/diffusion/smoke/mnist.yaml")
+    assert str(by_dataset["fashion"].recipe_path).endswith("configs/diffusion/smoke/fashion.yaml")
+    assert str(by_dataset["cifar10"].recipe_path).endswith("configs/diffusion/smoke/cifar10.yaml")
 
 
 def test_smoke_seed_defaults_are_single_seed() -> None:
@@ -124,9 +177,9 @@ def test_build_smoke_study_plans_resolve_lightweight_recipes_and_eval_overrides(
     assert len(plans) == 1
     plan = plans[0]
     assert plan.study_mode == "smoke"
-    assert plan.config_name == "mnist_64_smoke"
-    assert str(plan.recipe_path).endswith("configs/diffusion/smoke/mnist_64.yaml")
-    assert plan.run_name == "parity_mnist_64_smoke_seed001"
+    assert plan.config_name == "mnist_smoke"
+    assert str(plan.recipe_path).endswith("configs/diffusion/smoke/mnist.yaml")
+    assert plan.run_name == "study_mnist_smoke_seed001"
     assert _parse_option(plan.eval_command, "--num-generated-samples") == "64"
     assert _parse_option(plan.eval_command, "--artifact-sample-count") == "4"
     assert _parse_option(plan.eval_command, "--nearest-neighbor-count") == "4"
@@ -253,8 +306,8 @@ def test_smoke_and_full_studies_use_distinct_run_paths_and_cannot_share_registry
         smoke=True,
     )[0]
 
-    assert full_plan.run_name == "parity_mnist_64_seed001"
-    assert smoke_plan.run_name == "parity_mnist_64_smoke_seed001"
+    assert full_plan.run_name == "study_mnist_seed001"
+    assert smoke_plan.run_name == "study_mnist_smoke_seed001"
     assert full_plan.train_run_dir != smoke_plan.train_run_dir
     assert full_plan.evaluation_dir != smoke_plan.evaluation_dir
 

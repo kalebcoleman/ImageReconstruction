@@ -1,33 +1,32 @@
-# Diffusion Parity Recipes
+# Diffusion Study Recipes
 
-These recipe files lock a fair cross-dataset comparison protocol for the pixel-space ADM diffusion path.
+Default final-study recipes are dataset-appropriate instead of forcing every
+dataset through the same `64x64` RGB ADM path.
 
-Shared across `mnist_64.yaml`, `fashion_64.yaml`, `cifar10_64.yaml`, and `imagenet_64.yaml`:
+Default full-study recipes:
 
-- `image_size = 64`
-- `diffusion_channels = 3`
-- `diffusion_backbone = adm`
-- `diffusion_preprocessing = parity_64`
-- `prediction_type = v`
-- `schedule = cosine`
-- `ema_decay = 0.999`
-- `class_dropout_prob = 0.1`
-- `sampler = ddim`
-- `sampling_steps = 50`
-- `ddim_eta = 0.0`
-- `attention_resolutions = [16, 8]`
+- `mnist.yaml`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
+- `fashion.yaml`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
+- `cifar10.yaml`: ADM diffusion, `64x64`, `3` channels, natural-image preprocessing
 
-Allowed to differ across datasets:
+Default smoke recipes live under `smoke/` with the same dataset choices and
+reduced runtime defaults for quick end-to-end validation.
 
-- `epochs`
-- `batch_size`
-- `num_workers`
-- `eval_batch_size`
-- `data_dir`
-- `output_dir`
-- `run_name`
-- the concrete ImageNet subset/full-data realization behind `data_dir`
+Key design change:
 
-`imagenet_64.yaml` is a protocol definition, not a claim that the repo has already validated a full ImageNet-64 benchmark.
+- MNIST and FashionMNIST are no longer converted to RGB `64x64` by default.
+- CIFAR10 remains the primary ADM `64x64` RGB recipe.
+- The old strict `64x64` RGB parity family is archived under `experimental/`
+  and `smoke/experimental/` for comparison or reproduction only.
 
-Lightweight smoke-test variants live under `smoke/` with the same dataset scope and preprocessing path, but reduced runtime defaults intended for quick end-to-end validation of the parity-study pipeline.
+Recommended final-study entrypoints:
+
+- `configs/diffusion/mnist.yaml`
+- `configs/diffusion/fashion.yaml`
+- `configs/diffusion/cifar10.yaml`
+
+Recommended smoke entrypoints:
+
+- `configs/diffusion/smoke/mnist.yaml`
+- `configs/diffusion/smoke/fashion.yaml`
+- `configs/diffusion/smoke/cifar10.yaml`
