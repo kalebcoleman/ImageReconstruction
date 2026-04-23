@@ -79,6 +79,23 @@ def test_dataset_parity_configs_resolve_same_locked_geometry() -> None:
     assert {recipe.values["diffusion_preprocessing"] for recipe in loaded} == {"parity_64"}
 
 
+def test_smoke_parity_configs_resolve_lightweight_protocol() -> None:
+    recipe_names = ("mnist_64", "fashion_64", "cifar10_64")
+    loaded = [
+        load_recipe(REPO_ROOT / "configs" / "diffusion" / "smoke" / f"{recipe_name}.yaml")
+        for recipe_name in recipe_names
+    ]
+
+    assert {recipe.values["protocol_name"] for recipe in loaded} == {"adm64_parity_smoke_v1"}
+    assert {recipe.values["timesteps"] for recipe in loaded} == {100}
+    assert {recipe.values["sampling_steps"] for recipe in loaded} == {20}
+    assert {recipe.values["epochs"] for recipe in loaded} == {1}
+    assert {recipe.values["sample_count"] for recipe in loaded} == {4}
+    assert {recipe.values["eval_num_generated_samples"] for recipe in loaded} == {64}
+    assert {recipe.values["diffusion_preprocessing"] for recipe in loaded} == {"parity_64"}
+    assert all(str(recipe.values["config_name"]).endswith("_smoke") for recipe in loaded)
+
+
 def test_shared_preprocessing_assumptions_are_explicit() -> None:
     for dataset_name in ("mnist", "fashion", "cifar10", "imagenet"):
         description = describe_diffusion_preprocessing(

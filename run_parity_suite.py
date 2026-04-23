@@ -12,6 +12,7 @@ from diffusion.final_deliverables import (
 )
 from diffusion.parity_study import (
     DEFAULT_STUDY_SEEDS,
+    DEFAULT_SMOKE_STUDY_SEEDS,
     FINAL_STUDY_DATASETS,
     build_study_plans,
     execute_parity_suite,
@@ -27,8 +28,10 @@ def _parse_datasets(values: list[str] | None) -> tuple[str, ...]:
     return tuple(normalize_dataset_name(value) for value in values)
 
 
-def _parse_seeds(values: list[int] | None) -> tuple[int, ...]:
+def _parse_seeds(values: list[int] | None, *, smoke: bool) -> tuple[int, ...]:
     if not values:
+        if smoke:
+            return DEFAULT_SMOKE_STUDY_SEEDS
         return DEFAULT_STUDY_SEEDS
     return tuple(values)
 
@@ -43,6 +46,7 @@ def build_parser() -> argparse.ArgumentParser:
     common_run.add_argument("--datasets", nargs="*", default=None, help="Datasets to include. Defaults to the final-study set: mnist fashion cifar10.")
     common_run.add_argument("--seeds", nargs="*", type=int, default=None, help="Seeds to run. Defaults to 1 2 3.")
     common_run.add_argument("--config-dir", type=Path, default=Path("configs/diffusion"))
+    common_run.add_argument("--smoke", action="store_true", help="Use the lightweight smoke-test recipes and default to seed 1 when --seeds is omitted.")
 
     run_parser = subparsers.add_parser("run", parents=[common_run], help="Launch train/eval phases for the parity study.")
     run_parser.add_argument("--phase", choices=("train", "eval", "both"), default="both")
@@ -79,13 +83,14 @@ def main() -> None:
 
     if args.command in {"run", "plan"}:
         datasets = _parse_datasets(args.datasets)
-        seeds = _parse_seeds(args.seeds)
+        seeds = _parse_seeds(args.seeds, smoke=args.smoke)
         plans = build_study_plans(
             study_dir=args.study_dir,
             data_dir=args.data_dir,
             datasets=datasets,
             seeds=seeds,
             config_dir=args.config_dir,
+            smoke=args.smoke,
         )
 
         if args.command == "plan":

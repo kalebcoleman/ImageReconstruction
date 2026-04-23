@@ -5,8 +5,10 @@ from pathlib import Path
 
 import pytest
 
+from run_parity_suite import _parse_seeds
 from diffusion.parity_study import (
     DEFAULT_STUDY_SEEDS,
+    DEFAULT_SMOKE_STUDY_SEEDS,
     FINAL_STUDY_DATASETS,
     build_study_plans,
     ensure_path_safe,
@@ -106,6 +108,32 @@ def test_build_study_plans_defaults_and_multi_seed_resolution(tmp_path: Path) ->
     assert all(plan.run_name.startswith("parity_") for plan in plans)
 
 
+def test_smoke_seed_defaults_are_single_seed() -> None:
+    assert _parse_seeds(None, smoke=True) == DEFAULT_SMOKE_STUDY_SEEDS
+
+
+def test_build_smoke_study_plans_resolve_lightweight_recipes_and_eval_overrides(tmp_path: Path) -> None:
+    plans = build_study_plans(
+        study_dir=tmp_path / "study",
+        data_dir=tmp_path / "data",
+        datasets=("mnist",),
+        seeds=DEFAULT_SMOKE_STUDY_SEEDS,
+        smoke=True,
+    )
+
+    assert len(plans) == 1
+    plan = plans[0]
+    assert plan.study_mode == "smoke"
+    assert plan.config_name == "mnist_64_smoke"
+    assert str(plan.recipe_path).endswith("configs/diffusion/smoke/mnist_64.yaml")
+    assert plan.run_name == "parity_mnist_64_smoke_seed001"
+    assert _parse_option(plan.eval_command, "--num-generated-samples") == "64"
+    assert _parse_option(plan.eval_command, "--artifact-sample-count") == "4"
+    assert _parse_option(plan.eval_command, "--nearest-neighbor-count") == "4"
+    assert _parse_option(plan.eval_command, "--nearest-neighbor-reference-limit") == "256"
+    assert _parse_option(plan.eval_command, "--lpips-pair-count") == "16"
+
+
 def test_write_study_plan_files_outputs_shell_and_slurm(tmp_path: Path) -> None:
     plans = build_study_plans(
         study_dir=tmp_path / "study",
@@ -194,6 +222,47 @@ def test_output_path_safety_rejects_incomplete_existing_run(tmp_path: Path) -> N
 
     with pytest.raises(FileExistsError):
         ensure_path_safe(plan, phase="train", skip_existing=False)
+
+
+def test_smoke_and_full_studies_use_distinct_run_paths_and_cannot_share_registry(tmp_path: Path) -> None:
+    study_dir = tmp_path / "study"
+    full_plan = build_study_plans(
+        study_dir=study_dir,
+        data_dir=tmp_path / "data",
+        datasets=("mnist",),
+        seeds=(1,),
+    )[0]
+    smoke_plan = build_study_plans(
+        study_dir=study_dir,
+        data_dir=tmp_path / "data",
+        datasets=("mnist",),
+        seeds=(1,),
+        smoke=True,
+    )[0]
+
+    assert full_plan.run_name == "parity_mnist_64_seed001"
+    assert smoke_plan.run_name == "parity_mnist_64_smoke_seed001"
+    assert full_plan.train_run_dir != smoke_plan.train_run_dir
+    assert full_plan.evaluation_dir != smoke_plan.evaluation_dir
+
+    execute_parity_suite(
+        study_dir=study_dir,
+        plans=[full_plan],
+        phase="train",
+        skip_existing=False,
+        runner=fake_runner,
+        repo_root=REPO_ROOT,
+    )
+
+    with pytest.raises(ValueError, match="separate study directories"):
+        execute_parity_suite(
+            study_dir=study_dir,
+            plans=[smoke_plan],
+            phase="train",
+            skip_existing=False,
+            runner=fake_runner,
+            repo_root=REPO_ROOT,
+        )
 
 
 def test_best_run_selection_logic() -> None:

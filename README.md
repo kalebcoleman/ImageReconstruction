@@ -108,6 +108,8 @@ The parity recipes are:
 - [`configs/diffusion/cifar10_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10_64.yaml)
 - [`configs/diffusion/imagenet_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/imagenet_64.yaml)
 
+The lightweight smoke-test recipes live under [`configs/diffusion/smoke/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/). They keep the same ADM/parity preprocessing path and output schema, but reduce runtime with `1` epoch, `100` diffusion timesteps, fewer generated samples, smaller artifact grids, and smaller CFG comparison defaults.
+
 The ImageNet recipe is a protocol definition for `64x64` parity runs. It does not claim that the repo has already validated a full ImageNet benchmark result in this phase.
 
 ## Final Study Runner
@@ -129,6 +131,14 @@ Default final-study behavior:
 
 The final-study runner does not replace [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) or [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py). It calls them with deterministic config/seed/run-name combinations.
 
+Smoke-test behavior with `--smoke`:
+
+- uses the lightweight recipes under [`configs/diffusion/smoke/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/)
+- defaults to seed `1` when `--seeds` is omitted
+- uses distinct run names such as `parity_mnist_64_smoke_seed001`
+- keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
+- refuses to mix smoke and full-study runs in the same `--study-dir`
+
 Plan shell and Slurm-friendly commands without running:
 
 ```bash
@@ -138,7 +148,49 @@ python3 run_parity_suite.py plan \
   --phase both
 ```
 
-Run the full final study:
+Quick smoke validation for MNIST:
+
+```bash
+python3 run_parity_suite.py run \
+  --smoke \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-mnist \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --datasets mnist \
+  --phase both
+
+python3 run_parity_suite.py deliverables \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-mnist
+```
+
+Quick smoke validation for FashionMNIST:
+
+```bash
+python3 run_parity_suite.py run \
+  --smoke \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-fashion \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --datasets fashion \
+  --phase both
+
+python3 run_parity_suite.py deliverables \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-fashion
+```
+
+Quick smoke validation for CIFAR10:
+
+```bash
+python3 run_parity_suite.py run \
+  --smoke \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --datasets cifar10 \
+  --phase both
+
+python3 run_parity_suite.py deliverables \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10
+```
+
+Run the unchanged full final study:
 
 ```bash
 python3 run_parity_suite.py run \

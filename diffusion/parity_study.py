@@ -19,13 +19,33 @@ from diffusion.reporting import save_manifest_bundle
 
 FINAL_STUDY_DATASETS: tuple[str, ...] = ("mnist", "fashion", "cifar10")
 DEFAULT_STUDY_SEEDS: tuple[int, ...] = (1, 2, 3)
+DEFAULT_SMOKE_STUDY_SEEDS: tuple[int, ...] = (1,)
+DEFAULT_STUDY_CONFIG_DIR = Path("configs/diffusion")
+SMOKE_STUDY_CONFIG_DIR = DEFAULT_STUDY_CONFIG_DIR / "smoke"
+SMOKE_EVAL_COMMAND_OVERRIDES: tuple[str, ...] = (
+    "--num-generated-samples",
+    "64",
+    "--artifact-sample-count",
+    "4",
+    "--cfg-comparison-scales",
+    "0",
+    "3",
+    "--nearest-neighbor-count",
+    "4",
+    "--nearest-neighbor-reference-limit",
+    "256",
+    "--lpips-pair-count",
+    "16",
+)
 SUPPORTED_PHASES: tuple[str, ...] = ("train", "eval", "both")
+SUPPORTED_STUDY_MODES: tuple[str, ...] = ("full", "smoke")
 
 
 @dataclass(frozen=True)
 class StudyRunPlan:
     """Deterministic train/eval plan for one dataset and seed."""
 
+    study_mode: str
     dataset: str
     seed: int
     recipe_path: Path
@@ -75,13 +95,26 @@ def build_recipe_path(config_dir: Path, dataset: str) -> Path:
     return recipe_path
 
 
+def resolve_study_config_dir(config_dir: Path, *, smoke: bool) -> Path:
+    """Map the default parity recipe directory to the smoke recipe directory when requested."""
+
+    if smoke and config_dir == DEFAULT_STUDY_CONFIG_DIR:
+        return SMOKE_STUDY_CONFIG_DIR
+    return config_dir
+
+
+def resolve_study_mode(*, smoke: bool) -> str:
+    return "smoke" if smoke else "full"
+
+
 def build_study_plans(
     *,
     study_dir: Path,
     data_dir: Path,
     datasets: tuple[str, ...] = FINAL_STUDY_DATASETS,
     seeds: tuple[int, ...] = DEFAULT_STUDY_SEEDS,
-    config_dir: Path = Path("configs/diffusion"),
+    config_dir: Path = DEFAULT_STUDY_CONFIG_DIR,
+    smoke: bool = False,
     repo_root: Path | None = None,
 ) -> list[StudyRunPlan]:
     """Create deterministic train/eval plans for the final study."""
@@ -89,13 +122,15 @@ def build_study_plans(
     resolved_repo_root = (repo_root or Path(__file__).resolve().parents[1]).resolve()
     resolved_study_dir = study_dir.expanduser().resolve()
     resolved_data_dir = data_dir.expanduser().resolve()
+    resolved_config_dir = (resolved_repo_root / resolve_study_config_dir(config_dir, smoke=smoke)).resolve()
+    study_mode = resolve_study_mode(smoke=smoke)
     runs_root = resolved_study_dir / "runs"
     summaries_root = resolved_study_dir / "summaries"
 
     plans: list[StudyRunPlan] = []
     for dataset in datasets:
         normalized_dataset = normalize_dataset_name(dataset)
-        recipe_path = build_recipe_path((resolved_repo_root / config_dir).resolve(), normalized_dataset)
+        recipe_path = build_recipe_path(resolved_config_dir, normalized_dataset)
         recipe = load_recipe(recipe_path)
         config_name = str(recipe.values["config_name"])
         protocol_name = recipe.values.get("protocol_name")
@@ -133,8 +168,11 @@ def build_study_plans(
                 "--data-dir",
                 str(resolved_data_dir),
             ]
+            if smoke:
+                eval_command.extend(SMOKE_EVAL_COMMAND_OVERRIDES)
             plans.append(
                 StudyRunPlan(
+                    study_mode=study_mode,
                     dataset=normalized_dataset,
                     seed=seed,
                     recipe_path=recipe_path,
@@ -192,8 +230,57 @@ def save_registry(study_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
     return manifest_paths
 
 
+def _infer_entry_study_mode(entry: dict[str, Any]) -> str:
+    recipe_path = str(entry.get("recipe_path") or "").replace("\\", "/")
+    config_name = str(entry.get("config_name") or "")
+    if "/configs/diffusion/smoke/" in recipe_path or config_name.endswith("_smoke"):
+        return "smoke"
+    return "full"
+
+
+def _ensure_study_mode_compatible(registry: dict[str, Any], *, plans: list[StudyRunPlan], study_dir: Path) -> None:
+    planned_modes = {plan.study_mode for plan in plans}
+    if not planned_modes:
+        return
+    if len(planned_modes) != 1:  # pragma: no cover - defensive
+        raise ValueError(f"Study plans must agree on one mode, got {sorted(planned_modes)}.")
+    planned_mode = next(iter(planned_modes))
+    if planned_mode not in SUPPORTED_STUDY_MODES:  # pragma: no cover - defensive
+        raise ValueError(f"Unsupported study mode: {planned_mode}")
+
+    existing_mode = registry.get("study_mode")
+    if existing_mode in SUPPORTED_STUDY_MODES:
+        if existing_mode != planned_mode:
+            raise ValueError(
+                f"Study directory {study_dir} is already initialized for {existing_mode} runs. "
+                "Keep smoke and full studies in separate study directories."
+            )
+        registry["study_mode"] = existing_mode
+        return
+
+    entries = list((registry.get("entries") or {}).values())
+    if not entries:
+        registry["study_mode"] = planned_mode
+        return
+
+    inferred_modes = {_infer_entry_study_mode(entry) for entry in entries}
+    if len(inferred_modes) != 1:
+        raise ValueError(
+            f"Study directory {study_dir} already contains mixed parity outputs. "
+            "Keep smoke and full studies in separate study directories."
+        )
+    inferred_mode = next(iter(inferred_modes))
+    if inferred_mode != planned_mode:
+        raise ValueError(
+            f"Study directory {study_dir} already contains {inferred_mode} runs. "
+            "Keep smoke and full studies in separate study directories."
+        )
+    registry["study_mode"] = inferred_mode
+
+
 def _initial_registry_entry(plan: StudyRunPlan, git_commit: str | None) -> dict[str, Any]:
     return {
+        "study_mode": plan.study_mode,
         "dataset": plan.dataset,
         "seed": plan.seed,
         "recipe_path": str(plan.recipe_path.resolve()),
@@ -230,6 +317,7 @@ def initialize_registry(
     git_commit: str | None,
 ) -> dict[str, Any]:
     registry = load_registry(study_dir)
+    _ensure_study_mode_compatible(registry, plans=plans, study_dir=study_dir)
     entries = dict(registry.get("entries") or {})
     for plan in plans:
         entry_id = _study_entry_id(plan)

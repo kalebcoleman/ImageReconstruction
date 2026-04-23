@@ -29,3 +29,5 @@ Allowed to differ across datasets:
 - the concrete ImageNet subset/full-data realization behind `data_dir`
 
 `imagenet_64.yaml` is a protocol definition, not a claim that the repo has already validated a full ImageNet-64 benchmark.
+
+Lightweight smoke-test variants live under `smoke/` with the same dataset scope and preprocessing path, but reduced runtime defaults intended for quick end-to-end validation of the parity-study pipeline.
