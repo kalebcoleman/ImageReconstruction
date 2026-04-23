@@ -1,20 +1,43 @@
 from __future__ import annotations
 
 import json
+import numbers
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+import torch
 import yaml
 
 
 def _yaml_ready(value: Any) -> Any:
+    """Recursively coerce values into plain YAML-safe Python primitives."""
+
+    if value is None:
+        return None
     if isinstance(value, Path):
         return str(value)
+    if isinstance(value, torch.device):
+        return str(value)
+    if isinstance(value, bool):
+        return bool(value)
+    if isinstance(value, str):
+        return str(value)
+    if isinstance(value, numbers.Integral):
+        return int(value)
+    if isinstance(value, numbers.Real):
+        return float(value)
+    if isinstance(value, np.ndarray):
+        return [_yaml_ready(item) for item in value.tolist()]
+    if isinstance(value, np.generic):
+        return _yaml_ready(value.item())
     if isinstance(value, dict):
         return {str(key): _yaml_ready(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):
         return [_yaml_ready(item) for item in value]
-    return value
+    if isinstance(value, (set, frozenset)):
+        return [_yaml_ready(item) for item in sorted(value, key=lambda item: str(item))]
+    return str(value)
 
 
 def save_yaml(path: Path, payload: dict[str, Any]) -> None:
