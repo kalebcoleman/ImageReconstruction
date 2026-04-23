@@ -53,8 +53,16 @@ def _load_torchvision_model(
     """Load a torchvision model from the local cache unless downloads are allowed."""
 
     kwargs = dict(factory_kwargs or {})
+    defer_disable_aux_logits = kwargs.get("aux_logits") is False and weights is not None
+    if defer_disable_aux_logits:
+        kwargs.pop("aux_logits", None)
+
     if allow_model_download:
-        return factory(weights=weights, **kwargs)
+        model = factory(weights=weights, **kwargs)
+        if defer_disable_aux_logits and hasattr(model, "aux_logits") and hasattr(model, "AuxLogits"):
+            model.aux_logits = False
+            model.AuxLogits = None
+        return model
 
     checkpoint_dir = Path(torch.hub.get_dir()) / "checkpoints"
     checkpoint_path = checkpoint_dir / Path(weights.url).name
@@ -67,6 +75,9 @@ def _load_torchvision_model(
     model = factory(weights=None, **kwargs)
     state_dict = torch.load(checkpoint_path, map_location="cpu")
     model.load_state_dict(state_dict)
+    if defer_disable_aux_logits and hasattr(model, "aux_logits") and hasattr(model, "AuxLogits"):
+        model.aux_logits = False
+        model.AuxLogits = None
     return model
 
 

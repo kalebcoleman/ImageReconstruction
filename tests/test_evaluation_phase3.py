@@ -7,7 +7,7 @@ import tempfile
 import torch
 from torch.utils.data import DataLoader, TensorDataset
 
-from diffusion.eval_metrics import prepare_images_for_metrics
+from diffusion.eval_metrics import _load_torchvision_model, prepare_images_for_metrics
 from diffusion.eval_pipeline import (
     CheckpointEvaluationConfig,
     _load_or_compute_reference_stats,
@@ -47,6 +47,17 @@ class DummyMetricBackend:
     def __init__(self) -> None:
         self.inception = DummyInception()
         self.lpips = DummyLPIPS()
+
+
+class DummyVisionModel(torch.nn.Module):
+    def __init__(self, *, aux_logits: bool) -> None:
+        super().__init__()
+        self.aux_logits = aux_logits
+        self.AuxLogits = object() if aux_logits else None
+        self.loaded_state_dict = None
+
+    def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
+        self.loaded_state_dict = state_dict
 
 
 def dummy_metric_backend_factory(
@@ -112,6 +123,33 @@ def test_prepare_images_for_metrics_handles_range_and_channels() -> None:
     assert prepared.shape == (1, 3, 4, 4)
     assert float(prepared.min()) >= 0.0
     assert float(prepared.max()) <= 1.0
+
+
+def test_load_torchvision_model_disables_aux_logits_after_weighted_load() -> None:
+    calls: list[dict[str, object]] = []
+
+    def factory(*, weights: object | None = None, aux_logits: bool = True, transform_input: bool = False) -> DummyVisionModel:
+        calls.append(
+            {
+                "weights": weights,
+                "aux_logits": aux_logits,
+                "transform_input": transform_input,
+            }
+        )
+        return DummyVisionModel(aux_logits=aux_logits)
+
+    model = _load_torchvision_model(
+        factory,
+        weights=object(),
+        allow_model_download=True,
+        factory_kwargs={"aux_logits": False, "transform_input": False},
+    )
+
+    assert len(calls) == 1
+    assert calls[0]["weights"] is not None
+    assert calls[0]["aux_logits"] is True
+    assert model.aux_logits is False
+    assert model.AuxLogits is None
 
 
 def test_reference_stats_cache_reuse(monkeypatch, tmp_path: Path) -> None:
