@@ -3,7 +3,6 @@ from __future__ import annotations
 import csv
 from dataclasses import asdict, dataclass, fields
 import json
-import math
 from pathlib import Path
 from typing import Any, Callable
 
@@ -34,8 +33,6 @@ from diffusion.sampling import sample_images
 from diffusion.training import evaluate_diffusion_metrics
 from train import (
     ExperimentConfig,
-    build_diffusion_sample_labels,
-    diffusion_to_display_range,
     instantiate_model,
     json_ready,
     plot_diffusion_reconstructions,

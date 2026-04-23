@@ -14,7 +14,6 @@ from diffusion.parity_study import (
     ensure_path_safe,
     execute_parity_suite,
     generate_final_study_summaries,
-    load_registry,
     select_best_and_median_runs,
     write_study_plan_files,
 )
@@ -301,6 +300,35 @@ def test_output_path_safety_rejects_incomplete_existing_run(tmp_path: Path) -> N
 
     with pytest.raises(FileExistsError):
         ensure_path_safe(plan, phase="train", skip_existing=False)
+
+
+def test_clear_incomplete_train_run_allows_rerun(tmp_path: Path) -> None:
+    study_dir = tmp_path / "study"
+    plans = build_study_plans(
+        study_dir=study_dir,
+        data_dir=tmp_path / "data",
+        datasets=("cifar10",),
+        seeds=(1,),
+    )
+    plan = plans[0]
+    plan.train_run_dir.mkdir(parents=True, exist_ok=True)
+    stale_file = plan.train_run_dir / "stale.txt"
+    stale_file.write_text("partial", encoding="utf-8")
+
+    registry = execute_parity_suite(
+        study_dir=study_dir,
+        plans=plans,
+        phase="train",
+        skip_existing=False,
+        clear_incomplete=True,
+        runner=fake_runner,
+        repo_root=REPO_ROOT,
+    )
+
+    entry = next(iter(registry["entries"].values()))
+    assert entry["train_status"] == "completed"
+    assert plan.checkpoint_path.exists()
+    assert not stale_file.exists()
 
 
 def test_smoke_and_full_studies_use_distinct_run_paths_and_cannot_share_registry(tmp_path: Path) -> None:

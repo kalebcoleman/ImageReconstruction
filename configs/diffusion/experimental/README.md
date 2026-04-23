@@ -7,6 +7,10 @@ backbone.
 They remain available for comparison or historical reproduction, but they are
 not the default final-study configs anymore.
 
+The default [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py)
+workflow never selects these archived recipes unless you intentionally override
+`--config-dir`.
+
 Archived full-study recipes:
 
 - `mnist_64.yaml`

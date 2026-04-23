@@ -1,3 +1,5 @@
+"""Compatibility-named CLI wrapper for the dataset-appropriate final diffusion study."""
+
 from __future__ import annotations
 
 import argparse
@@ -64,6 +66,12 @@ def build_parser() -> argparse.ArgumentParser:
     run_parser = subparsers.add_parser("run", parents=[common_run], help="Launch train/eval phases for the final diffusion study.")
     run_parser.add_argument("--phase", choices=("train", "eval", "both"), default="both")
     run_parser.add_argument("--skip-existing", action=argparse.BooleanOptionalAction, default=False)
+    run_parser.add_argument(
+        "--clear-incomplete",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Delete incomplete train/eval outputs for the planned deterministic run names before rerunning.",
+    )
     run_parser.add_argument("--summarize", action=argparse.BooleanOptionalAction, default=True, help="Regenerate study summaries after execution.")
 
     plan_parser = subparsers.add_parser("plan", parents=[common_run], help="Write shell and Slurm command plans without executing them.")
@@ -127,6 +135,7 @@ def main() -> None:
             plans=plans,
             phase=args.phase,
             skip_existing=args.skip_existing,
+            clear_incomplete=args.clear_incomplete,
         )
         print("Registry:")
         print((args.study_dir.expanduser().resolve() / "study_registry.json").resolve())

@@ -1,5 +1,10 @@
 # Redesigning ImageReconstruction for Dataset-Universal Diffusion
 
+> Historical design memo: this document captures an earlier expansion plan.
+> The current final-study default in this repository is the dataset-appropriate
+> recipe set under `configs/diffusion/`, not the older strict cross-dataset
+> `64x64` RGB parity protocol discussed below.
+
 ## Executive summary
 
 The current `kalebcoleman/ImageReconstruction` diffusion path is a clean, reproducible MNIST-family baseline rather than a general image-generation stack. It currently registers only MNIST and Fashion-MNIST aliases, applies a one-channel diffusion normalization transform, instantiates a 3-level grayscale U-Net written for 28×28 inputs, samples tensors shaped `(N, 1, 28, 28)`, and evaluates diffusion mainly with denoising-style MSE/PSNR/SSIM rather than generative metrics such as FID, IS, or LPIPS. At the same time, the repo already has good foundations worth preserving: safe Slurm workflows, isolated run directories, config logging, EMA support, checkpointing, and artifact generation. fileciteturn8file0L1-L1 fileciteturn9file0L1-L1 fileciteturn10file0L1-L1 fileciteturn11file0L1-L1 fileciteturn12file0L1-L1 fileciteturn13file0L1-L1 fileciteturn14file0L1-L1 fileciteturn15file0L1-L1

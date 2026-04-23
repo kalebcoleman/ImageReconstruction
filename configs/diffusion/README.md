@@ -30,3 +30,8 @@ Recommended smoke entrypoints:
 - `configs/diffusion/smoke/mnist.yaml`
 - `configs/diffusion/smoke/fashion.yaml`
 - `configs/diffusion/smoke/cifar10.yaml`
+
+The default [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py)
+flow resolves recipes from this directory and `smoke/`. It does not pick the
+archived `experimental/` recipes unless you explicitly point `--config-dir`
+there for comparison work.

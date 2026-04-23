@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from dataclasses import asdict
 from pathlib import Path
-import tempfile
 
 import pytest
 import torch
@@ -201,7 +200,6 @@ def test_reference_stats_cache_reuse(monkeypatch, tmp_path: Path) -> None:
         reference_stats_dir=stats_dir,
         batch_size=2,
     )
-    first_call_count = backend.inception.extract_calls
     assert stats.count == 6
     assert stats_path.exists()
 

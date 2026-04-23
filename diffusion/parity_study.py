@@ -1,3 +1,5 @@
+"""Final-study orchestration helpers kept under legacy parity-oriented names for compatibility."""
+
 from __future__ import annotations
 
 import csv
@@ -6,6 +8,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import shlex
+import shutil
 import statistics
 import subprocess
 import sys
@@ -374,6 +377,34 @@ def ensure_path_safe(plan: StudyRunPlan, *, phase: str, skip_existing: bool) -> 
         raise ValueError(f"Unsupported phase: {phase}")
 
 
+def _ensure_within_study_dir(path: Path, *, study_dir: Path) -> Path:
+    resolved_path = path.expanduser().resolve()
+    resolved_study_dir = study_dir.expanduser().resolve()
+    resolved_path.relative_to(resolved_study_dir)
+    return resolved_path
+
+
+def clear_incomplete_outputs(
+    plan: StudyRunPlan,
+    *,
+    phase: str,
+    study_dir: Path,
+) -> bool:
+    """Delete an incomplete train/eval directory so a deterministic rerun can proceed."""
+
+    if phase == "train":
+        if not plan.train_run_dir.exists() or is_train_complete(plan):
+            return False
+        shutil.rmtree(_ensure_within_study_dir(plan.train_run_dir, study_dir=study_dir))
+        return True
+    if phase == "eval":
+        if not plan.evaluation_dir.exists() or is_eval_complete(plan):
+            return False
+        shutil.rmtree(_ensure_within_study_dir(plan.evaluation_dir, study_dir=study_dir))
+        return True
+    raise ValueError(f"Unsupported phase: {phase}")
+
+
 Runner = Callable[[list[str], Path], None]
 
 
@@ -402,6 +433,7 @@ def execute_parity_suite(
     plans: list[StudyRunPlan],
     phase: str,
     skip_existing: bool,
+    clear_incomplete: bool = False,
     runner: Runner = subprocess_runner,
     repo_root: Path | None = None,
 ) -> dict[str, Any]:
@@ -418,6 +450,18 @@ def execute_parity_suite(
         entry = entries[_study_entry_id(plan)]
 
         if phase in {"train", "both"}:
+            if clear_incomplete and clear_incomplete_outputs(plan, phase="train", study_dir=study_dir):
+                entry["train_status"] = "pending"
+                entry["train_started_at"] = None
+                entry["train_completed_at"] = None
+                entry["train_manifest_path"] = None
+                entry["selected_checkpoint_path"] = None
+                entry["selected_evaluation_dir"] = None
+                entry["evaluation_manifest_path"] = None
+                entry["eval_status"] = "pending"
+                entry["eval_started_at"] = None
+                entry["eval_completed_at"] = None
+                save_registry(study_dir, registry)
             ensure_path_safe(plan, phase="train", skip_existing=skip_existing)
             if is_train_complete(plan) and skip_existing:
                 entry["train_status"] = "skipped_existing"
@@ -438,6 +482,13 @@ def execute_parity_suite(
                 raise FileNotFoundError(
                     f"Cannot evaluate without a completed training run at {plan.checkpoint_path}."
                 )
+            if clear_incomplete and clear_incomplete_outputs(plan, phase="eval", study_dir=study_dir):
+                entry["eval_status"] = "pending"
+                entry["eval_started_at"] = None
+                entry["eval_completed_at"] = None
+                entry["evaluation_manifest_path"] = None
+                entry["selected_evaluation_dir"] = None
+                save_registry(study_dir, registry)
             ensure_path_safe(plan, phase="eval", skip_existing=skip_existing)
             if is_eval_complete(plan) and skip_existing:
                 entry["eval_status"] = "skipped_existing"

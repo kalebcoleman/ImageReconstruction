@@ -127,6 +127,7 @@ Smoke-test behavior with `--smoke`:
 - keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
 - refuses to mix smoke and full-study runs in the same `--study-dir`
 - if a dataset is not staged locally yet, add `--download` on a login node to pass the opt-in download through to `train.py`
+- if a previous failed run left an incomplete deterministic output directory behind, add `--clear-incomplete` to remove that incomplete path and rerun the same planned entry safely
 - if pretrained evaluation weights are not cached yet, rerun the eval-inclusive command with `--allow-model-download` once
 
 Plan shell and Slurm-friendly commands without running:
@@ -177,6 +178,7 @@ If CIFAR10 is missing from `--data-dir`, rerun on a login node with:
 python3 run_parity_suite.py run \
   --smoke \
   --download \
+  --clear-incomplete \
   --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets cifar10 \
@@ -395,104 +397,9 @@ If the dataset is missing and `--download` is not set, training fails with a cle
 
 ## Local experiment
 
-Quick local ADM diffusion tests:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset mnist \
-  --epochs 5 \
-  --batch_size 64 \
-  --timesteps 1000 \
-  --base_channels 64 \
-  --time_dim 128 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --prediction_type v \
-  --attention-resolutions 16 8 \
-  --class_dropout_prob 0.1 \
-  --guidance_scale 3.0 \
-  --sampler ddim \
-  --sampling_steps 50 \
-  --grad_clip_norm 1.0 \
-  --amp_dtype auto \
-  --sample_count 8
-```
-
-FashionMNIST:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset fashion \
-  --epochs 5 \
-  --batch_size 64 \
-  --timesteps 1000 \
-  --image_size 64 \
-  --diffusion_channels 3 \
-  --base_channels 64 \
-  --time_dim 128 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --prediction_type v \
-  --attention-resolutions 16 8 \
-  --class_dropout_prob 0.1 \
-  --guidance_scale 3.0 \
-  --sampler ddim \
-  --sampling_steps 50 \
-  --grad_clip_norm 1.0 \
-  --amp_dtype auto \
-  --sample_count 8
-```
-
-CIFAR-10:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset cifar10 \
-  --epochs 5 \
-  --batch_size 64 \
-  --timesteps 1000 \
-  --image_size 64 \
-  --diffusion_channels 3 \
-  --base_channels 64 \
-  --time_dim 128 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --prediction_type v \
-  --attention-resolutions 16 8 \
-  --class_dropout_prob 0.1 \
-  --guidance_scale 3.0 \
-  --sampler ddim \
-  --sampling_steps 50 \
-  --grad_clip_norm 1.0 \
-  --amp_dtype auto \
-  --sample_count 8
-```
-
-The old simple style still works, now on the ADM default:
-
-```bash
-python3 train.py --model diffusion --dataset mnist --epochs 5
-```
-
-Legacy compatibility run:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset mnist \
-  --legacy-diffusion \
-  --image_size 28 \
-  --diffusion_channels 1 \
-  --epochs 5
-```
-
-Dataset-appropriate default recipe runs:
+Prefer the dataset-appropriate recipes for local diffusion runs. They match the
+default final-study design and avoid accidentally sending MNIST or FashionMNIST
+through the archived `64x64` RGB comparison path.
 
 MNIST:
 
@@ -518,7 +425,47 @@ python3 train.py --config configs/diffusion/cifar10.yaml \
   --output-dir /scratch/$USER/image-reconstruction-runs/final-study
 ```
 
-Archived strict `64x64` RGB parity recipes:
+If you want manual CLI overrides instead of configs, make the intended backbone
+explicit rather than relying on the trainer's bare diffusion defaults.
+
+Legacy MNIST compatibility run:
+
+```bash
+python3 train.py \
+  --model diffusion \
+  --dataset mnist \
+  --legacy-diffusion \
+  --image_size 28 \
+  --diffusion_channels 1 \
+  --epochs 5
+```
+
+CIFAR10 ADM run:
+
+```bash
+python3 train.py \
+  --model diffusion \
+  --dataset cifar10 \
+  --epochs 5 \
+  --image_size 64 \
+  --diffusion_channels 3 \
+  --base_channels 64 \
+  --time_dim 128 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
+  --prediction_type v \
+  --attention-resolutions 16 8 \
+  --class_dropout_prob 0.1 \
+  --guidance_scale 3.0 \
+  --sampler ddim \
+  --sampling_steps 50 \
+  --grad_clip_norm 1.0 \
+  --amp_dtype auto \
+  --sample_count 8
+```
+
+Archived strict `64x64` RGB comparison run:
 
 ```bash
 python3 train.py --config configs/diffusion/experimental/mnist_64.yaml \
