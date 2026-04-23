@@ -46,6 +46,7 @@ def build_aggregate_row(payload: dict[str, Any], metrics_path: Path) -> dict[str
         "config_name": payload.get("config_name"),
         "protocol_name": payload.get("protocol_name"),
         "dataset_variant": payload.get("dataset_variant"),
+        "seed": payload.get("seed"),
         "checkpoint_path": payload.get("checkpoint_path"),
         "evaluation_dir": payload.get("evaluation_dir"),
         "metrics_path": str(metrics_path.resolve()),

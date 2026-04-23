@@ -65,7 +65,7 @@ def save_manifest_bundle(
     yaml_path = output_dir / f"{basename}.yaml"
     markdown_path = output_dir / f"{basename}.md"
 
-    json_path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+    json_path.write_text(json.dumps(_yaml_ready(payload), indent=2, sort_keys=True), encoding="utf-8")
     save_yaml(yaml_path, payload)
     save_markdown_summary(markdown_path, title, payload)
 

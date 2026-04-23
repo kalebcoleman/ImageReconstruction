@@ -773,6 +773,7 @@ def run_checkpoint_evaluation(
         "config_name": config.config_name,
         "protocol_name": config.protocol_name,
         "dataset_variant": config.dataset_variant,
+        "seed": config.seed,
         "protocol_locked_fields": list(config.protocol_locked_fields) if config.protocol_locked_fields is not None else None,
         "protocol_allowed_overrides": list(config.protocol_allowed_overrides) if config.protocol_allowed_overrides is not None else None,
         "protocol_metadata": json_ready(config.protocol_metadata) if config.protocol_metadata else {},

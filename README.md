@@ -110,6 +110,168 @@ The parity recipes are:
 
 The ImageNet recipe is a protocol definition for `64x64` parity runs. It does not claim that the repo has already validated a full ImageNet benchmark result in this phase.
 
+## Final Study Runner
+
+Phase 5 adds [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py), a lightweight orchestration layer for the final seeded study on:
+
+- `mnist`
+- `fashion`
+- `cifar10`
+
+Default final-study behavior:
+
+- `3` seeds per dataset
+- deterministic run names like `parity_mnist_64_seed001`
+- train/eval linkage recorded in `study_registry.json`
+- non-destructive safety checks for existing run directories
+- optional `--skip-existing` reuse for completed train/eval steps
+- summary regeneration after execution by default
+
+The final-study runner does not replace [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) or [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py). It calls them with deterministic config/seed/run-name combinations.
+
+Plan shell and Slurm-friendly commands without running:
+
+```bash
+python3 run_parity_suite.py plan \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase both
+```
+
+Run the full final study:
+
+```bash
+python3 run_parity_suite.py run \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase both
+```
+
+Run train-only:
+
+```bash
+python3 run_parity_suite.py run \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase train
+```
+
+Run eval-only:
+
+```bash
+python3 run_parity_suite.py run \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase eval
+```
+
+Reuse completed train/eval outputs instead of erroring:
+
+```bash
+python3 run_parity_suite.py run \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase both \
+  --skip-existing
+```
+
+Regenerate summaries:
+
+```bash
+python3 run_parity_suite.py summarize \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
+```
+
+Select best and median runs per dataset by FID:
+
+```bash
+python3 run_parity_suite.py select-best \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
+```
+
+Outputs added by the study runner:
+
+- `study_registry.json` plus YAML/Markdown views
+- per-run study summary
+- per-dataset mean/std summary across seeds
+- best/median run selection tables
+- final study Markdown report
+- planned command files for shell and Slurm array submission
+
+## Final Deliverables
+
+Phase 6 adds a polished deliverables export layer for the completed final study. It gathers:
+
+- main results table
+- mean/std table across seeds
+- best-run table per dataset
+- artifact index
+- best exported figures with stable names
+- report-ready markdown summary
+- presentation figure index
+
+Generate the full final deliverables bundle:
+
+```bash
+python3 run_parity_suite.py deliverables \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
+```
+
+Regenerate the final markdown summaries only:
+
+```bash
+python3 run_parity_suite.py summarize \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
+```
+
+Export the best artifacts per dataset into one stable folder:
+
+```bash
+python3 run_parity_suite.py export-best-artifacts \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
+```
+
+Default deliverables bundle layout:
+
+```text
+{study_dir}/deliverables/
+├── deliverables_bundle.json
+├── deliverables_bundle.yaml
+├── deliverables_bundle.md
+├── figures/
+│   ├── mnist_best_generated_samples.png
+│   ├── mnist_cfg_comparison.png
+│   ├── mnist_reverse_process_snapshots.png
+│   ├── mnist_nearest_neighbors.png
+│   └── ...
+├── tables/
+│   ├── main_results_table.csv
+│   ├── mean_std_table.csv
+│   ├── best_runs_table.csv
+│   └── artifact_index.csv
+└── summaries/
+    ├── analysis_summary.md
+    ├── project_report_summary.md
+    └── presentation_figure_index.md
+```
+
+Metric interpretation for the final deliverables:
+
+- `FID` is the primary generative metric.
+- `Inception Score` is secondary.
+- `LPIPS diversity` is a perceptual diversity signal, not a fidelity metric.
+- `PSNR` and `SSIM` remain auxiliary paired denoising metrics only.
+
+Best-run selection:
+
+- best run per dataset = minimum `FID`
+- median run per dataset = sort by `FID`, choose index `floor(n/2)`
+
+Aggregation:
+
+- cross-run evaluation payloads are collected by [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py)
+- study-level summaries and final bundle exports are layered on top of those same evaluation payloads, not reconstructed from logs
+
 ## Pre-download datasets
 
 On a login node, pre-download the datasets once into a shared path. The `--download` flag is intentionally off by default for compute-node safety.
