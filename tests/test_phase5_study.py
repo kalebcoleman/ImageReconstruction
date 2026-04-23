@@ -200,6 +200,19 @@ def test_build_study_plans_can_pass_allow_model_download_to_eval(tmp_path: Path)
     assert "--allow-model-download" in plans[0].eval_command
 
 
+def test_build_study_plans_can_pass_download_to_train(tmp_path: Path) -> None:
+    plans = build_study_plans(
+        study_dir=tmp_path / "study",
+        data_dir=tmp_path / "data",
+        datasets=("cifar10",),
+        seeds=(1,),
+        download=True,
+    )
+
+    assert len(plans) == 1
+    assert "--download" in plans[0].train_command
+
+
 def test_write_study_plan_files_outputs_shell_and_slurm(tmp_path: Path) -> None:
     plans = build_study_plans(
         study_dir=tmp_path / "study",

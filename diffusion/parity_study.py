@@ -120,6 +120,7 @@ def build_study_plans(
     seeds: tuple[int, ...] = DEFAULT_STUDY_SEEDS,
     config_dir: Path = DEFAULT_STUDY_CONFIG_DIR,
     smoke: bool = False,
+    download: bool = False,
     allow_model_download: bool = False,
     repo_root: Path | None = None,
 ) -> list[StudyRunPlan]:
@@ -162,6 +163,8 @@ def build_study_plans(
                 "--output-dir",
                 str(runs_root),
             ]
+            if download:
+                train_command.append("--download")
             eval_command = [
                 sys.executable,
                 "evaluate.py",

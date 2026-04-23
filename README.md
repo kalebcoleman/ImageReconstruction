@@ -126,6 +126,7 @@ Smoke-test behavior with `--smoke`:
 - uses distinct run names such as `study_mnist_smoke_seed001`
 - keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
 - refuses to mix smoke and full-study runs in the same `--study-dir`
+- if a dataset is not staged locally yet, add `--download` on a login node to pass the opt-in download through to `train.py`
 - if pretrained evaluation weights are not cached yet, rerun the eval-inclusive command with `--allow-model-download` once
 
 Plan shell and Slurm-friendly commands without running:
@@ -164,6 +165,18 @@ Quick CIFAR10 ADM smoke train:
 ```bash
 python3 run_parity_suite.py run \
   --smoke \
+  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --datasets cifar10 \
+  --phase train
+```
+
+If CIFAR10 is missing from `--data-dir`, rerun on a login node with:
+
+```bash
+python3 run_parity_suite.py run \
+  --smoke \
+  --download \
   --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets cifar10 \

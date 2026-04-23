@@ -50,6 +50,12 @@ def build_parser() -> argparse.ArgumentParser:
     common_run.add_argument("--config-dir", type=Path, default=Path("configs/diffusion"))
     common_run.add_argument("--smoke", action="store_true", help="Use the lightweight smoke-test recipes and default to seed 1 when --seeds is omitted.")
     common_run.add_argument(
+        "--download",
+        action=argparse.BooleanOptionalAction,
+        default=False,
+        help="Pass through to train.py so datasets can be downloaded when missing. Defaults to false for cluster safety.",
+    )
+    common_run.add_argument(
         "--allow-model-download",
         action="store_true",
         help="Pass through to evaluate.py so missing pretrained metric-model weights can be downloaded during evaluation.",
@@ -98,6 +104,7 @@ def main() -> None:
             seeds=seeds,
             config_dir=args.config_dir,
             smoke=args.smoke,
+            download=args.download,
             allow_model_download=args.allow_model_download,
         )
 
