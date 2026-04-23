@@ -28,6 +28,7 @@ outputs/mnist/diffusion/mnist_diffusion_t500_ch16_bs128_lr1e-3_seed42_job12345_a
 - `array_diffusion_medium.slurm`: main report-friendly sweep. This is the best default for a class project demo.
 - `array_diffusion_large.slurm`: optional heavier sweep that adds 1000-timestep runs, extends width to `base_channels=64`, and adds limited optimizer/batch sensitivity checks.
 - `array_diffusion.slurm`: alias for the medium sweep so old submission habits still work.
+- `final_study/`: Monsoon-ready Slurm arrays for the final dataset-appropriate diffusion study.
 
 ## Environment activation
 
@@ -66,6 +67,22 @@ The scripts now use the real trainer flags directly:
 Backward-compatible aliases such as `--batch-size` and `--diffusion-timesteps` still work, but the Slurm scripts use the canonical names above.
 
 ## Recommended workflow
+
+For the final MNIST/FashionMNIST/CIFAR10 diffusion study, use the dataset-specific
+arrays under [`final_study/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study)
+instead of the older exploratory sweeps:
+
+```bash
+sbatch slurm/final_study/smoke_array.slurm
+sbatch slurm/final_study/train_mnist_array.slurm
+sbatch slurm/final_study/train_fashion_array.slurm
+sbatch slurm/final_study/train_cifar10_array.slurm
+ALLOW_MODEL_DOWNLOAD=1 sbatch slurm/final_study/eval_all_array.slurm
+sbatch slurm/final_study/finalize.slurm
+```
+
+See [`final_study/README.md`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study/README.md)
+for Monsoon resource recommendations, rerun commands, and GPU constraint overrides.
 
 ### 1. Smoke test
 

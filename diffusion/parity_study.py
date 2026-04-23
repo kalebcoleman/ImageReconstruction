@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import csv
+from contextlib import contextmanager
 from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 import json
+import os
 from pathlib import Path
 import shlex
 import shutil
@@ -13,6 +15,11 @@ import statistics
 import subprocess
 import sys
 from typing import Any, Callable
+
+if os.name == "posix":
+    import fcntl
+else:  # pragma: no cover - Windows fallback for local development.
+    fcntl = None  # type: ignore[assignment]
 
 from aggregate_results import aggregate_evaluation_results, discover_metric_files, save_aggregate_outputs
 from diffusion.data import normalize_dataset_name
@@ -213,6 +220,26 @@ def registry_path(study_dir: Path) -> Path:
     return study_dir / "study_registry.json"
 
 
+def registry_lock_path(study_dir: Path) -> Path:
+    return study_dir / ".study_registry.lock"
+
+
+@contextmanager
+def registry_file_lock(study_dir: Path):
+    """Serialize registry writes across Slurm array tasks without serializing training."""
+
+    study_dir.mkdir(parents=True, exist_ok=True)
+    lock_path = registry_lock_path(study_dir)
+    with lock_path.open("a", encoding="utf-8") as lock_file:
+        if fcntl is not None:
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        try:
+            yield
+        finally:
+            if fcntl is not None:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+
+
 def _study_entry_id(plan: StudyRunPlan) -> str:
     return f"{plan.dataset}:{plan.config_name}:seed{plan.seed:03d}"
 
@@ -233,15 +260,33 @@ def load_registry(study_dir: Path) -> dict[str, Any]:
     return _load_json(path)
 
 
+def merge_registry_payload(current: dict[str, Any], payload: dict[str, Any]) -> dict[str, Any]:
+    """Merge concurrent registry snapshots while letting the caller's entries win."""
+
+    merged = dict(current)
+    merged.update(payload)
+    if current.get("created_at") and payload.get("created_at"):
+        merged["created_at"] = current["created_at"]
+    current_entries = dict(current.get("entries") or {})
+    payload_entries = dict(payload.get("entries") or {})
+    merged["entries"] = {**current_entries, **payload_entries}
+    return merged
+
+
 def save_registry(study_dir: Path, payload: dict[str, Any]) -> dict[str, str]:
-    payload["updated_at"] = _utc_now()
-    manifest_paths = save_manifest_bundle(
-        study_dir,
-        basename="study_registry",
-        title="Final Diffusion Study Registry",
-        payload=payload,
-    )
-    return manifest_paths
+    with registry_file_lock(study_dir):
+        current = load_registry(study_dir)
+        merged = merge_registry_payload(current, payload)
+        merged["updated_at"] = _utc_now()
+        payload.clear()
+        payload.update(merged)
+        manifest_paths = save_manifest_bundle(
+            study_dir,
+            basename="study_registry",
+            title="Final Diffusion Study Registry",
+            payload=payload,
+        )
+        return manifest_paths
 
 
 def _infer_entry_study_mode(entry: dict[str, Any]) -> str:

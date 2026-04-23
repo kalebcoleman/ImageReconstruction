@@ -23,6 +23,10 @@ ImageNet is not part of the default final study.
 - CIFAR10 uses the ADM diffusion path with native `32x32` RGB images.
 - The default study no longer forces identical image size, channels, or
   backbone across datasets.
+- Presentation figure exports keep those native resolutions and render image
+  grids with nearest-neighbor interpolation. This is especially important for
+  CIFAR10: its native `32x32` images look blurry in slides if a viewer smooths
+  them during display.
 
 Study configs:
 
@@ -31,6 +35,12 @@ Study configs:
 - [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
 - [`configs/diffusion/base_legacy28_gray.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_legacy28_gray.yaml)
 - [`configs/diffusion/base_adm32.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_adm32.yaml)
+
+Default full-study epochs:
+
+- MNIST: `50` epochs in [`configs/diffusion/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist.yaml)
+- FashionMNIST: `75` epochs in [`configs/diffusion/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion.yaml)
+- CIFAR10: `150` epochs in [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
 
 Smoke configs:
 
@@ -42,72 +52,79 @@ Smoke configs:
 
 ## Monsoon Commands
 
-Quick MNIST smoke:
+The recommended Monsoon path is the Slurm final-study array set in
+[`slurm/final_study/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study).
+Dataset-specific training arrays are preferred because Slurm arrays share one
+time limit: MNIST and FashionMNIST use 8-hour jobs, while CIFAR10 uses 24-hour
+jobs.
 
 ```bash
-python run_parity_suite.py run \
-  --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-smoke-mnist \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --datasets mnist \
-  --phase train
+sbatch slurm/final_study/smoke_array.slurm
 ```
 
-Quick Fashion smoke:
+Final training:
 
 ```bash
-python run_parity_suite.py run \
-  --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-smoke-fashion \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --datasets fashion \
-  --phase train
+sbatch slurm/final_study/train_mnist_array.slurm
+sbatch slurm/final_study/train_fashion_array.slurm
+sbatch slurm/final_study/train_cifar10_array.slurm
 ```
 
-Quick CIFAR10 smoke:
+First evaluation if metric weights are not cached:
 
 ```bash
-python run_parity_suite.py run \
-  --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-smoke-cifar10 \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --datasets cifar10 \
-  --phase train
+ALLOW_MODEL_DOWNLOAD=1 sbatch slurm/final_study/eval_all_array.slurm
 ```
 
-All-dataset smoke:
+Normal evaluation:
 
 ```bash
-python run_parity_suite.py run \
-  --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-smoke-all \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --datasets mnist fashion cifar10 \
-  --phase train
+sbatch slurm/final_study/eval_all_array.slurm
 ```
 
-Full final study:
+Finalize summaries, selections, exported best artifacts, and deliverables:
 
 ```bash
-python run_parity_suite.py run \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase both \
-  --allow-model-download
+sbatch slurm/final_study/finalize.slurm
 ```
 
-Summaries and deliverables:
+Resource defaults:
+
+- smoke: A100, 2h, 4 CPUs, 32G
+- MNIST/Fashion training: A100, 8h, 4 CPUs, 32G
+- CIFAR10 training: A100, 24h, 4 CPUs, 32G
+- evaluation: A100, 12h, 4 CPUs, 32G
+
+Logs are written under `slurm/final_study/logs/`.
+
+Rerun failed arrays normally; scripts pass `--skip-existing`, so completed
+deterministic outputs are reused:
 
 ```bash
-python run_parity_suite.py summarize \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-
-python run_parity_suite.py select-best \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-
-python run_parity_suite.py deliverables \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
+sbatch slurm/final_study/train_mnist_array.slurm
+sbatch slurm/final_study/eval_all_array.slurm
 ```
+
+Rerun one failed task with `--array`; add `CLEAR_INCOMPLETE=1` only when a
+failed task left an incomplete output directory:
+
+```bash
+sbatch --array=8 slurm/final_study/eval_all_array.slurm
+CLEAR_INCOMPLETE=1 sbatch --array=8 slurm/final_study/eval_all_array.slurm
+```
+
+Use `sbatch --constraint=h200`, `--constraint=v100`, or
+`--constraint=rtx6000` to switch GPU types. For a generic GPU, submit with an
+empty constraint if your Slurm version accepts it, or remove the
+`#SBATCH --constraint=a100` line from a local copy of the script.
+
+The 1-epoch smoke outputs are expected to be blurry or noisy; they are pipeline
+checks, not quality checks.
+
+The deliverables and `export-best-artifacts` commands create normal figure
+copies plus nearest-neighbor upscaled `*_presentation.png` copies by default.
+Use `--no-presentation-copies` to skip them or `--presentation-scale 6` to
+change the integer upscale factor.
 
 ## Notes
 

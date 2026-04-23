@@ -14,7 +14,7 @@ from diffusion.eval_pipeline import (
     _save_nearest_neighbor_grid,
     run_checkpoint_evaluation,
 )
-from train import ExperimentConfig, instantiate_model, json_ready
+from train import ExperimentConfig, instantiate_model, json_ready, render_image
 
 
 class DummyInception:
@@ -58,6 +58,15 @@ class DummyVisionModel(torch.nn.Module):
 
     def load_state_dict(self, state_dict: dict[str, torch.Tensor]) -> None:
         self.loaded_state_dict = state_dict
+
+
+class RecordingAxis:
+    def __init__(self) -> None:
+        self.imshow_kwargs: dict[str, object] | None = None
+
+    def imshow(self, image: object, **kwargs: object) -> None:
+        del image
+        self.imshow_kwargs = kwargs
 
 
 def dummy_metric_backend_factory(
@@ -142,6 +151,21 @@ def test_prepare_images_for_metrics_handles_range_and_channels() -> None:
     assert prepared.shape == (1, 3, 4, 4)
     assert float(prepared.min()) >= 0.0
     assert float(prepared.max()) <= 1.0
+
+
+def test_render_image_defaults_to_nearest_interpolation_for_low_resolution_artifacts() -> None:
+    axis = RecordingAxis()
+
+    render_image(axis, torch.rand(1, 28, 28))
+
+    assert axis.imshow_kwargs is not None
+    assert axis.imshow_kwargs["interpolation"] == "nearest"
+
+    high_res_axis = RecordingAxis()
+    render_image(high_res_axis, torch.rand(3, 64, 64))
+
+    assert high_res_axis.imshow_kwargs is not None
+    assert "interpolation" not in high_res_axis.imshow_kwargs
 
 
 def test_load_torchvision_model_disables_aux_logits_after_weighted_load() -> None:

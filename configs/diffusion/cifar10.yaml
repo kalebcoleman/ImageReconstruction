@@ -3,7 +3,7 @@ inherits:
 config_name: cifar10
 dataset: cifar10
 dataset_variant: cifar10_32_rgb_adm
-epochs: 50
+epochs: 150
 batch_size: 64
 num_workers: 4
 eval_batch_size: 64

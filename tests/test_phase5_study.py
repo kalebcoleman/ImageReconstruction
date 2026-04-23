@@ -14,6 +14,7 @@ from diffusion.parity_study import (
     ensure_path_safe,
     execute_parity_suite,
     generate_final_study_summaries,
+    merge_registry_payload,
     select_best_and_median_runs,
     write_study_plan_files,
 )
@@ -370,6 +371,39 @@ def test_smoke_and_full_studies_use_distinct_run_paths_and_cannot_share_registry
             runner=fake_runner,
             repo_root=REPO_ROOT,
         )
+
+
+def test_registry_merge_preserves_entries_from_parallel_array_tasks() -> None:
+    current = {
+        "created_at": "earlier",
+        "updated_at": "now",
+        "entries": {
+            "mnist:mnist:seed001": {
+                "dataset": "mnist",
+                "seed": 1,
+                "train_status": "running",
+            }
+        },
+    }
+    payload = {
+        "created_at": "later",
+        "updated_at": "later",
+        "entries": {
+            "fashion:fashion:seed002": {
+                "dataset": "fashion",
+                "seed": 2,
+                "train_status": "completed",
+            }
+        },
+    }
+
+    merged = merge_registry_payload(current, payload)
+
+    assert merged["created_at"] == "earlier"
+    assert set(merged["entries"]) == {
+        "mnist:mnist:seed001",
+        "fashion:fashion:seed002",
+    }
 
 
 def test_best_run_selection_logic() -> None:

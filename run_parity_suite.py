@@ -88,11 +88,35 @@ def build_parser() -> argparse.ArgumentParser:
     deliverables_parser = subparsers.add_parser("deliverables", help="Generate the polished final deliverables bundle.")
     deliverables_parser.add_argument("--study-dir", type=Path, required=True)
     deliverables_parser.add_argument("--output-dir", type=Path, default=None, help="Optional export directory. Defaults to <study-dir>/deliverables.")
+    deliverables_parser.add_argument(
+        "--presentation-copies",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Create nearest-neighbor upscaled *_presentation.png copies of exported figure artifacts.",
+    )
+    deliverables_parser.add_argument(
+        "--presentation-scale",
+        type=int,
+        default=4,
+        help="Integer scale factor for *_presentation.png copies. Defaults to 4.",
+    )
     deliverables_parser.add_argument("inputs", nargs="*", type=Path, help="Optional evaluation metrics files or directories. Defaults to <study-dir>/runs.")
 
     export_parser = subparsers.add_parser("export-best-artifacts", help="Copy the best artifacts per dataset into one stable folder.")
     export_parser.add_argument("--study-dir", type=Path, required=True)
     export_parser.add_argument("--output-dir", type=Path, default=None, help="Optional artifact export directory. Defaults to <study-dir>/deliverables/figures.")
+    export_parser.add_argument(
+        "--presentation-copies",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Create nearest-neighbor upscaled *_presentation.png copies of exported figure artifacts.",
+    )
+    export_parser.add_argument(
+        "--presentation-scale",
+        type=int,
+        default=4,
+        help="Integer scale factor for *_presentation.png copies. Defaults to 4.",
+    )
     export_parser.add_argument("inputs", nargs="*", type=Path, help="Optional evaluation metrics files or directories. Defaults to <study-dir>/runs.")
 
     return parser
@@ -101,6 +125,8 @@ def build_parser() -> argparse.ArgumentParser:
 def main() -> None:
     parser = build_parser()
     args = parser.parse_args()
+    if args.command in {"deliverables", "export-best-artifacts"} and args.presentation_scale < 1:
+        parser.error("--presentation-scale must be at least 1")
 
     if args.command in {"run", "plan"}:
         datasets = _parse_datasets(args.datasets)
@@ -175,6 +201,8 @@ def main() -> None:
             study_dir=args.study_dir,
             output_dir=args.output_dir,
             inputs=list(args.inputs) if args.inputs else None,
+            presentation_copies=args.presentation_copies,
+            presentation_scale=args.presentation_scale,
         )
         print("Deliverables bundle:")
         print(payload["bundle_manifest"]["json"])
@@ -192,6 +220,8 @@ def main() -> None:
         artifact_rows = export_best_artifacts(
             artifact_index_rows,
             output_dir=(args.output_dir or (args.study_dir / "deliverables" / "figures")).expanduser().resolve(),
+            presentation_copies=args.presentation_copies,
+            presentation_scale=args.presentation_scale,
         )
         print("Exported artifacts:")
         for row in artifact_rows:

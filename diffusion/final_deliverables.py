@@ -6,9 +6,13 @@ from pathlib import Path
 import shutil
 from typing import Any
 
+from PIL import Image, UnidentifiedImageError
+
 from diffusion.parity_study import generate_final_study_summaries
 from diffusion.reporting import save_manifest_bundle
 
+
+DEFAULT_PRESENTATION_SCALE = 4
 
 ARTIFACT_EXPORT_NAMES: dict[str, str] = {
     "generated_sample_grid": "generated_samples",
@@ -113,12 +117,47 @@ def build_artifact_index(best_run_rows: list[dict[str, Any]]) -> list[dict[str, 
     return rows
 
 
+def _nearest_resample_filter() -> int:
+    return getattr(getattr(Image, "Resampling", Image), "NEAREST")
+
+
+def save_nearest_neighbor_presentation_copy(
+    source_path: Path,
+    target_path: Path,
+    *,
+    scale: int = DEFAULT_PRESENTATION_SCALE,
+) -> None:
+    """Save a nearest-neighbor upscaled copy of an existing figure."""
+
+    if scale < 1:
+        raise ValueError("presentation scale must be at least 1")
+
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with Image.open(source_path) as image:
+            if scale == 1:
+                image.save(target_path)
+                return
+            resized = image.resize(
+                (image.width * scale, image.height * scale),
+                resample=_nearest_resample_filter(),
+            )
+            resized.save(target_path)
+    except UnidentifiedImageError:
+        shutil.copy2(source_path, target_path)
+
+
 def export_best_artifacts(
     artifact_index_rows: list[dict[str, Any]],
     *,
     output_dir: Path,
+    presentation_copies: bool = True,
+    presentation_scale: int = DEFAULT_PRESENTATION_SCALE,
 ) -> list[dict[str, Any]]:
     """Copy the highest-value figures into one stable final-deliverables folder."""
+
+    if presentation_copies and presentation_scale < 1:
+        raise ValueError("presentation scale must be at least 1")
 
     output_dir.mkdir(parents=True, exist_ok=True)
     exported_rows: list[dict[str, Any]] = []
@@ -126,16 +165,28 @@ def export_best_artifacts(
         dataset = row["dataset"]
         source_path_value = row.get("source_path")
         exported_path = None
+        presentation_exported_path = None
         if source_path_value:
             source_path = Path(str(source_path_value))
             if source_path.exists():
                 target_path = output_dir / f"{dataset}_{row['export_stem']}{source_path.suffix or '.png'}"
-                shutil.copy2(source_path, target_path)
+                if source_path.resolve() != target_path.resolve():
+                    shutil.copy2(source_path, target_path)
                 exported_path = str(target_path.resolve())
+                if presentation_copies:
+                    presentation_path = output_dir / f"{dataset}_{row['export_stem']}_presentation.png"
+                    if source_path.resolve() != presentation_path.resolve():
+                        save_nearest_neighbor_presentation_copy(
+                            source_path,
+                            presentation_path,
+                            scale=presentation_scale,
+                        )
+                    presentation_exported_path = str(presentation_path.resolve())
         exported_rows.append(
             {
                 **row,
                 "exported_path": exported_path,
+                "presentation_exported_path": presentation_exported_path,
             }
         )
     return exported_rows
@@ -241,7 +292,8 @@ def build_presentation_index_markdown(exported_artifact_rows: list[dict[str, Any
         lines.append(f"## {dataset}")
         for row in rows:
             lines.append(
-                f"- `{row['artifact_key']}`: source=`{row['source_path']}` exported=`{row['exported_path']}`"
+                f"- `{row['artifact_key']}`: source=`{row['source_path']}` "
+                f"exported=`{row['exported_path']}` presentation=`{row.get('presentation_exported_path')}`"
             )
         lines.append("")
     return "\n".join(lines)
@@ -252,6 +304,8 @@ def export_final_deliverables(
     study_dir: Path,
     output_dir: Path | None = None,
     inputs: list[Path] | None = None,
+    presentation_copies: bool = True,
+    presentation_scale: int = DEFAULT_PRESENTATION_SCALE,
 ) -> dict[str, Any]:
     """Export the polished final deliverables bundle for the completed study."""
 
@@ -267,6 +321,8 @@ def export_final_deliverables(
     exported_artifact_rows = export_best_artifacts(
         artifact_index_rows,
         output_dir=resolved_output_dir / "figures",
+        presentation_copies=presentation_copies,
+        presentation_scale=presentation_scale,
     )
 
     tables_dir = resolved_output_dir / "tables"
@@ -337,6 +393,8 @@ def export_final_deliverables(
         "analysis_summary_path": str(analysis_summary_path.resolve()),
         "project_report_summary_path": str(project_report_summary_path.resolve()),
         "presentation_figure_index_path": str(presentation_index_path.resolve()),
+        "presentation_copies": presentation_copies,
+        "presentation_scale": presentation_scale,
         "exported_artifacts": exported_artifact_rows,
         "source_summary_report": summary_payload["report_path"],
     }

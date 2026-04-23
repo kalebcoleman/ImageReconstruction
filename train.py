@@ -72,6 +72,9 @@ LOGGER = logging.getLogger("image_reconstruction")
 CRITERION = nn.MSELoss()
 DATASET_CACHE: dict[tuple[str, bool, str, bool, str], Dataset] = {}
 SUPPORTED_MODELS = ("ae", "dae", "vae", "diffusion")
+DEFAULT_IMAGE_INTERPOLATION = "nearest"
+AUTO_IMAGE_INTERPOLATION = "auto"
+LOW_RES_PRESENTATION_MAX_SIZE = 32
 
 
 @dataclass(frozen=True)
@@ -1044,20 +1047,47 @@ def image_for_plot(image: torch.Tensor) -> tuple[np.ndarray, dict[str, Any]]:
     raise ValueError(f"Unsupported channel count for plotting: {image.shape[0]}.")
 
 
-def render_image(axis: Any, image: torch.Tensor) -> None:
+def resolve_image_interpolation(
+    image: torch.Tensor,
+    *,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
+) -> str | None:
+    if interpolation != AUTO_IMAGE_INTERPOLATION:
+        return interpolation
+    if max(image.shape[-2:]) <= LOW_RES_PRESENTATION_MAX_SIZE:
+        return DEFAULT_IMAGE_INTERPOLATION
+    return None
+
+
+def render_image(
+    axis: Any,
+    image: torch.Tensor,
+    *,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
+) -> None:
     """Render either grayscale or RGB tensors without hardcoding one display mode."""
 
-    plot_image, render_kwargs = image_for_plot(image.detach().cpu().float())
+    plot_tensor = image.detach().cpu().float()
+    plot_image, render_kwargs = image_for_plot(plot_tensor)
+    resolved_interpolation = resolve_image_interpolation(plot_tensor, interpolation=interpolation)
+    if resolved_interpolation is not None:
+        render_kwargs = {**render_kwargs, "interpolation": resolved_interpolation}
     axis.imshow(plot_image, **render_kwargs)
 
 
-def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
+def plot_image_row(
+    images: torch.Tensor,
+    save_path: Path,
+    title: str,
+    *,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
+) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     num_images = images.shape[0]
     figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
     axes = np.atleast_1d(axes)
     for axis, image in zip(axes, images):
-        render_image(axis, prepare_display_images(image.unsqueeze(0))[0])
+        render_image(axis, prepare_display_images(image.unsqueeze(0))[0], interpolation=interpolation)
         axis.axis("off")
     figure.suptitle(title)
     figure.tight_layout()
@@ -1065,7 +1095,14 @@ def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
     plt.close(figure)
 
 
-def plot_image_grid(images: torch.Tensor, save_path: Path, title: str, *, num_cols: int = 5) -> None:
+def plot_image_grid(
+    images: torch.Tensor,
+    save_path: Path,
+    title: str,
+    *,
+    num_cols: int = 5,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
+) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     images = prepare_display_images(images)
     num_images = images.shape[0]
@@ -1078,7 +1115,7 @@ def plot_image_grid(images: torch.Tensor, save_path: Path, title: str, *, num_co
         axis = axes_array.flat[image_idx]
         axis.axis("off")
         if image_idx < num_images:
-            render_image(axis, images[image_idx])
+            render_image(axis, images[image_idx], interpolation=interpolation)
 
     figure.suptitle(title)
     figure.tight_layout()
@@ -1152,6 +1189,7 @@ def show_reconstructions(
     *,
     model_type: str,
     noise_level: float,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
 ) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
@@ -1170,14 +1208,18 @@ def show_reconstructions(
 
     clean_images = clean_images.cpu()
     reconstructed_images = reconstructed_images.cpu()
+    image_kwargs: dict[str, Any] = {"cmap": "gray"}
+    resolved_interpolation = resolve_image_interpolation(clean_images[0], interpolation=interpolation)
+    if resolved_interpolation is not None:
+        image_kwargs["interpolation"] = resolved_interpolation
 
     if noisy_images is not None:
         noisy_images = noisy_images.cpu()
         figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4), squeeze=False)
         for i in range(num_images):
-            axes[0, i].imshow(clean_images[i].squeeze(), cmap="gray")
-            axes[1, i].imshow(noisy_images[i].squeeze(), cmap="gray")
-            axes[2, i].imshow(reconstructed_images[i].squeeze(), cmap="gray")
+            axes[0, i].imshow(clean_images[i].squeeze(), **image_kwargs)
+            axes[1, i].imshow(noisy_images[i].squeeze(), **image_kwargs)
+            axes[2, i].imshow(reconstructed_images[i].squeeze(), **image_kwargs)
             for j in range(3):
                 axes[j, i].axis("off")
         axes[0, 0].set_title("Original")
@@ -1186,8 +1228,8 @@ def show_reconstructions(
     else:
         figure, axes = plt.subplots(2, num_images, figsize=(1.5 * num_images, 3), squeeze=False)
         for i in range(num_images):
-            axes[0, i].imshow(clean_images[i].squeeze(), cmap="gray")
-            axes[1, i].imshow(reconstructed_images[i].squeeze(), cmap="gray")
+            axes[0, i].imshow(clean_images[i].squeeze(), **image_kwargs)
+            axes[1, i].imshow(reconstructed_images[i].squeeze(), **image_kwargs)
             axes[0, i].axis("off")
             axes[1, i].axis("off")
         axes[0, 0].set_title("Original")
@@ -1264,6 +1306,7 @@ def plot_diffusion_snapshots(
     ddim_eta: float = 0.0,
     amp_dtype: str = "none",
     num_snapshots: int = 9,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
 ) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     _, intermediate_images, intermediate_steps = sample_images(
@@ -1294,7 +1337,7 @@ def plot_diffusion_snapshots(
         display_images = prepare_display_images(diffusion_to_display_range(images), rescale=True)
         for col_idx in range(num_samples):
             axis = axes[row_idx, col_idx]
-            render_image(axis, display_images[col_idx])
+            render_image(axis, display_images[col_idx], interpolation=interpolation)
             axis.axis("off")
             if col_idx == 0:
                 axis.set_ylabel(f"t={step_num}", rotation=0, labelpad=24, va="center", fontsize=9, fontweight="bold")
@@ -1320,6 +1363,7 @@ def plot_diffusion_reconstructions(
     prediction_type: str,
     save_path: Path,
     num_images: int = 8,
+    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
 ) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
@@ -1355,7 +1399,7 @@ def plot_diffusion_reconstructions(
     for row_idx, (row_title, row_images) in enumerate(zip(row_titles, image_rows)):
         for col_idx in range(num_images):
             axis = axes[row_idx, col_idx]
-            render_image(axis, row_images[col_idx])
+            render_image(axis, row_images[col_idx], interpolation=interpolation)
             axis.axis("off")
             if col_idx == 0:
                 axis.set_title(row_title)

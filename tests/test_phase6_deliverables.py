@@ -3,6 +3,8 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
+from PIL import Image
+
 from diffusion.final_deliverables import (
     build_analysis_summary_markdown,
     build_artifact_index,
@@ -198,3 +200,52 @@ def test_best_run_export_integrity(tmp_path: Path) -> None:
     source_text = Path(str(mnist_samples["source_path"])).read_text(encoding="utf-8")
     exported_text = Path(str(mnist_samples["exported_path"])).read_text(encoding="utf-8")
     assert source_text == exported_text
+
+
+def test_presentation_export_creates_nearest_neighbor_copy_without_overwriting_source(tmp_path: Path) -> None:
+    source_path = tmp_path / "generated_samples.png"
+    image = Image.new("RGB", (3, 2))
+    image.putdata(
+        [
+            (0, 0, 0),
+            (255, 0, 0),
+            (0, 255, 0),
+            (0, 0, 255),
+            (255, 255, 255),
+            (255, 255, 0),
+        ]
+    )
+    image.save(source_path)
+    source_bytes = source_path.read_bytes()
+
+    exported_rows = export_best_artifacts(
+        [
+            {
+                "dataset": "mnist",
+                "artifact_key": "generated_sample_grid",
+                "export_stem": "generated_samples",
+                "source_path": str(source_path),
+                "exists": True,
+            }
+        ],
+        output_dir=tmp_path / "exported_figures",
+        presentation_copies=True,
+        presentation_scale=4,
+    )
+
+    exported_path = Path(str(exported_rows[0]["exported_path"]))
+    presentation_path = Path(str(exported_rows[0]["presentation_exported_path"]))
+
+    assert source_path.read_bytes() == source_bytes
+    assert exported_path.exists()
+    assert presentation_path.exists()
+    assert exported_path.name == "mnist_generated_samples.png"
+    assert presentation_path.name == "mnist_generated_samples_presentation.png"
+    assert exported_path.resolve() != source_path.resolve()
+    assert presentation_path.resolve() != source_path.resolve()
+
+    with Image.open(presentation_path) as presentation_image:
+        assert presentation_image.size == (12, 8)
+        assert presentation_image.getpixel((0, 0)) == image.getpixel((0, 0))
+        assert presentation_image.getpixel((3, 0)) == image.getpixel((0, 0))
+        assert presentation_image.getpixel((4, 0)) == image.getpixel((1, 0))
