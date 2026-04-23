@@ -12,9 +12,15 @@
 
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_DIR="${REPO_DIR:-${HOME}/projects/ImageReconstruction}"
+COMMON_SH="${REPO_DIR}/slurm/final_study/common.sh"
+if [[ ! -f "${COMMON_SH}" ]]; then
+  echo "Unable to find final study common.sh at: ${COMMON_SH}" >&2
+  echo "Set REPO_DIR to the ImageReconstruction checkout before submitting with sbatch." >&2
+  exit 1
+fi
 # shellcheck disable=SC1091
-source "${SCRIPT_DIR}/common.sh"
+source "${COMMON_SH}"
 
 CURRENT_USER="${USER:-$(id -un)}"
 final_study_set_defaults "/scratch/${CURRENT_USER}/image-reconstruction-final-study"

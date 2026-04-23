@@ -40,6 +40,20 @@ PARTITION=gpu
 
 The smoke script uses `STUDY_DIR=/scratch/$USER/image-reconstruction-final-study-smoke-all`.
 
+## Repository Path
+
+Slurm copies submitted scripts into its spool directory before running them, so these scripts do not locate repository files relative to the script path. They default to `REPO_DIR=$HOME/projects/ImageReconstruction` and source `common.sh` from:
+
+```bash
+$REPO_DIR/slurm/final_study/common.sh
+```
+
+If your checkout is somewhere else, pass `REPO_DIR` at submission time:
+
+```bash
+REPO_DIR=/custom/path sbatch slurm/final_study/train_mnist_array.slurm
+```
+
 ## Submit Smoke
 
 ```bash
@@ -152,4 +166,10 @@ Each script supports `DRY_RUN=1` for command and task-mapping validation without
 
 ```bash
 DRY_RUN=1 SLURM_ARRAY_TASK_ID=8 bash slurm/final_study/eval_all_array.slurm
+```
+
+For a checkout outside the default repo path:
+
+```bash
+REPO_DIR="$PWD" DRY_RUN=1 SLURM_ARRAY_TASK_ID=8 bash slurm/final_study/eval_all_array.slurm
 ```

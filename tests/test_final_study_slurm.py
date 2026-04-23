@@ -3,6 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import re
+import shutil
 import subprocess
 
 from diffusion.parity_study import FINAL_STUDY_DATASETS
@@ -13,7 +14,14 @@ REPO_ROOT = Path(__file__).resolve().parents[1]
 SLURM_DIR = REPO_ROOT / "slurm" / "final_study"
 
 
-def _run_dry(script_name: str, tmp_path: Path, task_id: int, **extra_env: str) -> str:
+def _run_dry(
+    script_name: str,
+    tmp_path: Path,
+    task_id: int,
+    *,
+    copied_to_spool: bool = False,
+    **extra_env: str,
+) -> str:
     env = os.environ.copy()
     env.update(
         {
@@ -27,8 +35,15 @@ def _run_dry(script_name: str, tmp_path: Path, task_id: int, **extra_env: str) -
         }
     )
     env.update(extra_env)
+    script_path = SLURM_DIR / script_name
+    if copied_to_spool:
+        spool_dir = tmp_path / "var" / "spool" / "slurm" / "slurmd" / "job123"
+        spool_dir.mkdir(parents=True, exist_ok=True)
+        script_path = spool_dir / "slurm_script"
+        shutil.copy2(SLURM_DIR / script_name, script_path)
+
     result = subprocess.run(
-        ["bash", str(SLURM_DIR / script_name)],
+        ["bash", str(script_path)],
         cwd=REPO_ROOT,
         env=env,
         check=True,
@@ -42,6 +57,49 @@ def _assert_command_has(output: str, *parts: str) -> None:
     for part in parts:
         pattern = r"(?<!\S)" + re.escape(part) + r"(?!\S)"
         assert re.search(pattern, output), output
+
+
+def test_final_study_slurm_scripts_source_common_from_repo_dir_when_copied_to_spool(tmp_path: Path) -> None:
+    script_names = (
+        "smoke_array.slurm",
+        "train_mnist_array.slurm",
+        "train_fashion_array.slurm",
+        "train_cifar10_array.slurm",
+        "eval_all_array.slurm",
+        "finalize.slurm",
+    )
+
+    for script_name in script_names:
+        output = _run_dry(script_name, tmp_path, 0, copied_to_spool=True)
+
+        assert f"Repo: {REPO_ROOT}" in output
+        assert "DRY_RUN=1; skipping conda activation." in output
+
+
+def test_final_study_slurm_scripts_report_missing_common_path(tmp_path: Path) -> None:
+    missing_repo = tmp_path / "missing" / "ImageReconstruction"
+    env = os.environ.copy()
+    env.update(
+        {
+            "DRY_RUN": "1",
+            "SLURM_ARRAY_TASK_ID": "0",
+            "REPO_DIR": str(missing_repo),
+        }
+    )
+
+    result = subprocess.run(
+        ["bash", str(SLURM_DIR / "train_mnist_array.slurm")],
+        cwd=REPO_ROOT,
+        env=env,
+        check=False,
+        text=True,
+        capture_output=True,
+    )
+
+    expected_common = missing_repo / "slurm" / "final_study" / "common.sh"
+    assert result.returncode == 1
+    assert f"Unable to find final study common.sh at: {expected_common}" in result.stderr
+    assert "Set REPO_DIR to the ImageReconstruction checkout before submitting with sbatch." in result.stderr
 
 
 def test_final_epoch_configs_match_recommended_full_study_epochs() -> None:
