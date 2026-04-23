@@ -1,37 +1,31 @@
-# Diffusion Study Recipes
+# Diffusion Study Configs
 
-Default final-study recipes are dataset-appropriate instead of forcing every
-dataset through the same `64x64` RGB ADM path.
+Default final-study configs:
 
-Default full-study recipes:
+- `mnist.yaml`: legacy diffusion, native `28x28`, `1` channel
+- `fashion.yaml`: legacy diffusion, native `28x28`, `1` channel
+- `cifar10.yaml`: ADM diffusion, native `32x32`, `3` channels
 
-- `mnist.yaml`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
-- `fashion.yaml`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
-- `cifar10.yaml`: ADM diffusion, `64x64`, `3` channels, natural-image preprocessing
+Shared bases:
 
-Default smoke recipes live under `smoke/` with the same dataset choices and
-reduced runtime defaults for quick end-to-end validation.
+- `base_legacy28_gray.yaml`
+- `base_adm32.yaml`
 
-Key design change:
+Smoke configs:
 
-- MNIST and FashionMNIST are no longer converted to RGB `64x64` by default.
-- CIFAR10 remains the primary ADM `64x64` RGB recipe.
-- The old strict `64x64` RGB parity family is archived under `experimental/`
-  and `smoke/experimental/` for comparison or reproduction only.
+- `smoke/mnist.yaml`
+- `smoke/fashion.yaml`
+- `smoke/cifar10.yaml`
+- `smoke/base_legacy28_gray_smoke.yaml`
+- `smoke/base_adm32_smoke.yaml`
 
-Recommended final-study entrypoints:
+Design summary:
 
-- `configs/diffusion/mnist.yaml`
-- `configs/diffusion/fashion.yaml`
-- `configs/diffusion/cifar10.yaml`
-
-Recommended smoke entrypoints:
-
-- `configs/diffusion/smoke/mnist.yaml`
-- `configs/diffusion/smoke/fashion.yaml`
-- `configs/diffusion/smoke/cifar10.yaml`
+- MNIST and FashionMNIST stay grayscale and native-size.
+- CIFAR10 stays native `32x32` RGB.
+- ImageNet is not part of the default final study.
+- The old strict `64x64` RGB parity configs were removed from the default repo
+  workflow during cleanup.
 
 The default [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py)
-flow resolves recipes from this directory and `smoke/`. It does not pick the
-archived `experimental/` recipes unless you explicitly point `--config-dir`
-there for comparison work.
+flow resolves configs from this directory and `smoke/`.

@@ -82,7 +82,7 @@ def test_final_study_configs_resolve_dataset_appropriate_defaults() -> None:
     assert recipes["fashion"].values["diffusion_preprocessing"] == "default"
 
     assert recipes["cifar10"].values["diffusion_backbone"] == "adm"
-    assert recipes["cifar10"].values["image_size"] == 64
+    assert recipes["cifar10"].values["image_size"] == 32
     assert recipes["cifar10"].values["diffusion_channels"] == 3
     assert recipes["cifar10"].values["diffusion_preprocessing"] == "default"
 
@@ -108,8 +108,8 @@ def test_smoke_configs_resolve_lightweight_dataset_appropriate_defaults() -> Non
     assert recipes["fashion"].values["diffusion_channels"] == 1
     assert recipes["fashion"].values["diffusion_backbone"] == "legacy"
 
-    assert recipes["cifar10"].values["protocol_name"] == "adm64_rgb_smoke_v1"
-    assert recipes["cifar10"].values["image_size"] == 64
+    assert recipes["cifar10"].values["protocol_name"] == "adm32_rgb_smoke_v1"
+    assert recipes["cifar10"].values["image_size"] == 32
     assert recipes["cifar10"].values["diffusion_channels"] == 3
     assert recipes["cifar10"].values["diffusion_backbone"] == "adm"
     assert recipes["cifar10"].values["diffusion_preprocessing"] == "default"
@@ -139,12 +139,12 @@ def test_dataset_appropriate_preprocessing_assumptions_are_explicit() -> None:
 
     cifar_description = describe_diffusion_preprocessing(
         "cifar10",
-        image_size=64,
+        image_size=32,
         channels=3,
         preprocessing_protocol="default",
     )
     assert cifar_description["protocol"] == "default"
-    assert cifar_description["image_size"] == 64
+    assert cifar_description["image_size"] == 32
     assert cifar_description["channels"] == 3
     assert cifar_description["channel_conversion"] == "3->3"
     assert "random_horizontal_flip" in cifar_description["train_ops"]

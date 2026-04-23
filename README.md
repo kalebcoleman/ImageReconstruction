@@ -1,196 +1,86 @@
-# Image Reconstruction Training
+# Image Reconstruction
 
-This repository trains `ae`, `dae`, `vae`, and `diffusion` models through a single [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) entrypoint. Phase 1 of the diffusion refactor keeps the legacy autoencoder paths intact while expanding diffusion to MNIST, FashionMNIST, CIFAR10, and ImageNet-ready dataset adapters with a scalable ADM-style U-Net backend.
+This repo keeps the original `ae`, `dae`, and `vae` paths, plus the final
+dataset-appropriate diffusion study:
 
-Phase 2 extends the new ADM diffusion path with classifier-free guidance, configurable attention resolutions, `eps` / `v` prediction targets, DDPM + DDIM sampling, and mixed-precision / gradient-clipping controls for more realistic research-style runs on shared HPC systems.
+- `mnist`: legacy diffusion, native `28x28`, `1` channel
+- `fashion`: legacy diffusion, native `28x28`, `1` channel
+- `cifar10`: ADM diffusion, native `32x32`, `3` channels
 
-The training entrypoint remains safe for shared Slurm/HPC usage:
+ImageNet is not part of the default final study.
 
-- dataset roots are configurable with `--data_dir`
-- downloads are opt-in with `--download`
-- every run gets an isolated output directory
-- logs go to both stdout and `train.log`
-- resolved config is saved for reproducibility
+## Main Entry Points
 
-## CLI overview
+- [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py): train one run from CLI flags or a config
+- [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py): checkpoint-only evaluation and sampling
+- [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py): final-study orchestration
+- [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py): manual aggregation helper
 
-The primary entrypoint is [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py).
+## Final Study Design
 
-Common options:
+- MNIST and FashionMNIST use the legacy grayscale diffusion path with native
+  `28x28` images.
+- CIFAR10 uses the ADM diffusion path with native `32x32` RGB images.
+- The default study no longer forces identical image size, channels, or
+  backbone across datasets.
 
-- `--config /path/to/recipe.yaml`
-- `--model {ae,dae,vae,diffusion,all}`
-- `--dataset {mnist,fashion,fashion-mnist,fashion_mnist,cifar10,cifar,cifar-10,cifar_10,imagenet,ilsvrc,ilsvrc2012}`
-- `--epochs`
-- `--batch_size`
-- `--lr`
-- `--seed`
-- `--data_dir`
-- `--output_dir`
-- `--run_name`
-- `--num_workers`
-- `--download`
-
-Model-specific options:
-
-- `--latent_dim` for `ae`, `dae`, and `vae`
-- `--timesteps`
-- `--diffusion_backbone {adm,legacy}` or `--legacy-diffusion`
-- `--diffusion-preprocessing {default,parity_64}`
-- `--image_size`
-- `--diffusion_channels`
-- `--base_channels`
-- `--time_dim`
-- `--schedule {linear,cosine}`
-- `--beta_start`
-- `--beta_end`
-- `--ema_decay`
-- `--num_res_blocks`
-- `--prediction_type {eps,v}`
-- `--attention_resolutions 16 8`
-- `--class_dropout_prob`
-- `--guidance_scale`
-- `--sampler {ddpm,ddim}`
-- `--sampling_steps`
-- `--ddim_eta`
-- `--grad_clip_norm`
-- `--amp_dtype {auto,none,bf16,fp16}`
-- `--sample_count`
-
-Notes:
-
-- `--timesteps` is the diffusion process length and still supports settings such as `500` and `1000`.
-- `--time_dim` is only the timestep embedding width inside the UNet.
-- `--beta_start` and `--beta_end` shape the linear schedule; the cosine schedule uses the standard improved-DDPM cosine curve.
-- The bare CLI default is still `--diffusion_backbone adm`, which resolves to `64x64` and `3` channels unless you override them. The final-study configs below now choose dataset-appropriate backbones instead.
-- `--config` loads a YAML recipe first, then applies any explicit CLI flags on top of it.
-- The old diffusion path is still available through `--legacy-diffusion`; on MNIST/Fashion it resolves to native `28x28` grayscale by default.
-- `--prediction_type eps` preserves the earlier behavior. Use `--prediction_type v` for the stronger phase-2 objective.
-- `--sampler ddpm` preserves the earlier ancestral sampler behavior. `--sampler ddim --sampling_steps 50` is the main new fast-sampling path.
-- `--amp_dtype auto` prefers `bf16` on supported CUDA GPUs and falls back to `fp16` otherwise.
-- `ae`, `dae`, and `vae` remain MNIST/Fashion-only paths for now. CIFAR10 and ImageNet are diffusion-only in this phase.
-
-## Diffusion Study Recipes
-
-Phase 4 now defaults to dataset-appropriate diffusion recipes under [`configs/diffusion/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/):
-
-- `mnist` uses the legacy diffusion backbone at native `28x28` with `1` channel and grayscale preprocessing.
-- `fashion` uses the legacy diffusion backbone at native `28x28` with `1` channel and grayscale preprocessing.
-- `cifar10` uses the ADM diffusion backbone at `64x64` with `3` channels and natural-image preprocessing.
-
-Default full-study recipes:
+Study configs:
 
 - [`configs/diffusion/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist.yaml)
 - [`configs/diffusion/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion.yaml)
 - [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
+- [`configs/diffusion/base_legacy28_gray.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_legacy28_gray.yaml)
+- [`configs/diffusion/base_adm32.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_adm32.yaml)
 
-Default smoke recipes:
+Smoke configs:
 
 - [`configs/diffusion/smoke/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/mnist.yaml)
 - [`configs/diffusion/smoke/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/fashion.yaml)
 - [`configs/diffusion/smoke/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/cifar10.yaml)
+- [`configs/diffusion/smoke/base_legacy28_gray_smoke.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/base_legacy28_gray_smoke.yaml)
+- [`configs/diffusion/smoke/base_adm32_smoke.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/base_adm32_smoke.yaml)
 
-The old strict `64x64` RGB ADM parity family is still available under [`configs/diffusion/experimental/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/experimental/). Those archived configs preserve the earlier protocol for comparison, but they are no longer the default final-study path because forcing MNIST and FashionMNIST through RGB `64x64` tensors produced avoidable artifacts.
+## Monsoon Commands
 
-## Final Study Runner
-
-Phase 5 adds [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py), a lightweight orchestration layer for the final seeded study on:
-
-- `mnist`
-- `fashion`
-- `cifar10`
-
-The script name is kept for compatibility, but the default study is now dataset-appropriate rather than strict architecture/input-shape parity.
-
-Default final-study behavior:
-
-- `3` seeds per dataset
-- deterministic run names like `study_mnist_seed001`
-- train/eval linkage recorded in `study_registry.json`
-- non-destructive safety checks for existing run directories
-- optional `--skip-existing` reuse for completed train/eval steps
-- summary regeneration after execution by default
-
-Study defaults by dataset:
-
-- `mnist`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
-- `fashion`: legacy diffusion, `28x28`, `1` channel, grayscale preprocessing
-- `cifar10`: ADM diffusion, `64x64`, `3` channels, natural-image preprocessing
-
-The final-study runner does not replace [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) or [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py). It calls them with deterministic config/seed/run-name combinations.
-
-Smoke-test behavior with `--smoke`:
-
-- uses the lightweight recipes under [`configs/diffusion/smoke/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/)
-- defaults to seed `1` when `--seeds` is omitted
-- uses distinct run names such as `study_mnist_smoke_seed001`
-- keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
-- refuses to mix smoke and full-study runs in the same `--study-dir`
-- if a dataset is not staged locally yet, add `--download` on a login node to pass the opt-in download through to `train.py`
-- if a previous failed run left an incomplete deterministic output directory behind, add `--clear-incomplete` to remove that incomplete path and rerun the same planned entry safely
-- if pretrained evaluation weights are not cached yet, rerun the eval-inclusive command with `--allow-model-download` once
-
-Plan shell and Slurm-friendly commands without running:
+Quick MNIST smoke:
 
 ```bash
-python3 run_parity_suite.py plan \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase both
-```
-
-Quick MNIST legacy smoke train:
-
-```bash
-python3 run_parity_suite.py run \
+python run_parity_suite.py run \
   --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-mnist \
+  --study-dir /scratch/$USER/image-reconstruction-smoke-mnist \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets mnist \
   --phase train
 ```
 
-Quick FashionMNIST legacy smoke train:
+Quick Fashion smoke:
 
 ```bash
-python3 run_parity_suite.py run \
+python run_parity_suite.py run \
   --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-fashion \
+  --study-dir /scratch/$USER/image-reconstruction-smoke-fashion \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets fashion \
   --phase train
 ```
 
-Quick CIFAR10 ADM smoke train:
+Quick CIFAR10 smoke:
 
 ```bash
-python3 run_parity_suite.py run \
+python run_parity_suite.py run \
   --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
+  --study-dir /scratch/$USER/image-reconstruction-smoke-cifar10 \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets cifar10 \
   --phase train
 ```
 
-If CIFAR10 is missing from `--data-dir`, rerun on a login node with:
+All-dataset smoke:
 
 ```bash
-python3 run_parity_suite.py run \
+python run_parity_suite.py run \
   --smoke \
-  --download \
-  --clear-incomplete \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-cifar10 \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --datasets cifar10 \
-  --phase train
-```
-
-Quick all-dataset smoke train:
-
-```bash
-python3 run_parity_suite.py run \
-  --smoke \
-  --study-dir /scratch/$USER/image-reconstruction-final-study-smoke-all \
+  --study-dir /scratch/$USER/image-reconstruction-smoke-all \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --datasets mnist fashion cifar10 \
   --phase train
@@ -199,498 +89,49 @@ python3 run_parity_suite.py run \
 Full final study:
 
 ```bash
-python3 run_parity_suite.py run \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase both
-```
-
-If the first evaluation on a machine needs to cache Inception/LPIPS weights, add `--allow-model-download` to the `run` or `plan` command once:
-
-```bash
-python3 run_parity_suite.py run \
+python run_parity_suite.py run \
   --study-dir /scratch/$USER/image-reconstruction-final-study \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --phase both \
   --allow-model-download
 ```
 
-Run train-only:
+Summaries and deliverables:
 
 ```bash
-python3 run_parity_suite.py run \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase train
-```
+python run_parity_suite.py summarize \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
 
-Run eval-only:
+python run_parity_suite.py select-best \
+  --study-dir /scratch/$USER/image-reconstruction-final-study
 
-```bash
-python3 run_parity_suite.py run \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase eval
-```
-
-Reuse completed train/eval outputs instead of erroring:
-
-```bash
-python3 run_parity_suite.py run \
-  --study-dir /scratch/$USER/image-reconstruction-final-study \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --phase both \
-  --skip-existing
-```
-
-Regenerate summaries:
-
-```bash
-python3 run_parity_suite.py summarize \
+python run_parity_suite.py deliverables \
   --study-dir /scratch/$USER/image-reconstruction-final-study
 ```
-
-Select best and median runs per dataset by FID:
-
-```bash
-python3 run_parity_suite.py select-best \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-```
-
-Outputs added by the study runner:
-
-- `study_registry.json` plus YAML/Markdown views
-- per-run study summary
-- per-dataset mean/std summary across seeds
-- best/median run selection tables
-- final study Markdown report
-- planned command files for shell and Slurm array submission
-
-## Final Deliverables
-
-Phase 6 adds a polished deliverables export layer for the completed final study. It gathers:
-
-- main results table
-- mean/std table across seeds
-- best-run table per dataset
-- artifact index
-- best exported figures with stable names
-- report-ready markdown summary
-- presentation figure index
-
-Generate the full final deliverables bundle:
-
-```bash
-python3 run_parity_suite.py deliverables \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-```
-
-Regenerate the final markdown summaries only:
-
-```bash
-python3 run_parity_suite.py summarize \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-```
-
-Export the best artifacts per dataset into one stable folder:
-
-```bash
-python3 run_parity_suite.py export-best-artifacts \
-  --study-dir /scratch/$USER/image-reconstruction-final-study
-```
-
-Default deliverables bundle layout:
-
-```text
-{study_dir}/deliverables/
-├── deliverables_bundle.json
-├── deliverables_bundle.yaml
-├── deliverables_bundle.md
-├── figures/
-│   ├── mnist_generated_samples.png
-│   ├── mnist_cfg_comparison.png
-│   ├── mnist_diffusion_snapshots.png
-│   ├── mnist_reconstructions.png
-│   ├── mnist_nearest_neighbors.png
-│   └── ...
-├── tables/
-│   ├── main_results_table.csv
-│   ├── mean_std_table.csv
-│   ├── best_runs_table.csv
-│   └── artifact_index.csv
-└── summaries/
-    ├── analysis_summary.md
-    ├── project_report_summary.md
-    └── presentation_figure_index.md
-```
-
-Metric interpretation for the final deliverables:
-
-- `FID` is the primary generative metric.
-- `Inception Score` is secondary.
-- `LPIPS diversity` is a perceptual diversity signal, not a fidelity metric.
-- `PSNR` and `SSIM` remain auxiliary paired denoising metrics only.
-
-Best-run selection:
-
-- best run per dataset = minimum `FID`
-- median run per dataset = sort by `FID`, choose index `floor(n/2)`
-
-Aggregation:
-
-- cross-run evaluation payloads are collected by [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py)
-- study-level summaries and final bundle exports are layered on top of those same evaluation payloads, not reconstructed from logs
-
-## Pre-download datasets
-
-On a login node, pre-download the datasets once into a shared path. The `--download` flag is intentionally off by default for compute-node safety.
-
-MNIST:
-
-```bash
-python3 train.py \
-  --model ae \
-  --dataset mnist \
-  --epochs 1 \
-  --batch_size 512 \
-  --data_dir /shared/datasets/image-reconstruction \
-  --output_dir /tmp/image-reconstruction-bootstrap \
-  --download
-```
-
-Fashion-MNIST:
-
-```bash
-python3 train.py \
-  --model ae \
-  --dataset fashion \
-  --epochs 1 \
-  --batch_size 512 \
-  --data_dir /shared/datasets/image-reconstruction \
-  --output_dir /tmp/image-reconstruction-bootstrap \
-  --download
-```
-
-CIFAR-10:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset cifar10 \
-  --epochs 1 \
-  --batch_size 256 \
-  --data_dir /shared/datasets/image-reconstruction \
-  --output_dir /tmp/image-reconstruction-bootstrap \
-  --download
-```
-
-ImageNet setup is manual in this phase. Prepare:
-
-```text
-{data_dir}/imagenet/train/<class_name>/*.JPEG
-{data_dir}/imagenet/val/<class_name>/*.JPEG
-```
-
-`--download` is intentionally unsupported for ImageNet, and the trainer will fail with a clear path hint if those directories are missing.
-
-If the dataset is missing and `--download` is not set, training fails with a clear message telling you to pre-download on a login node or re-run with `--download`.
-
-## Local experiment
-
-Prefer the dataset-appropriate recipes for local diffusion runs. They match the
-default final-study design and avoid accidentally sending MNIST or FashionMNIST
-through the archived `64x64` RGB comparison path.
-
-MNIST:
-
-```bash
-python3 train.py --config configs/diffusion/mnist.yaml \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
-```
-
-FashionMNIST:
-
-```bash
-python3 train.py --config configs/diffusion/fashion.yaml \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
-```
-
-CIFAR10:
-
-```bash
-python3 train.py --config configs/diffusion/cifar10.yaml \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/final-study
-```
-
-If you want manual CLI overrides instead of configs, make the intended backbone
-explicit rather than relying on the trainer's bare diffusion defaults.
-
-Legacy MNIST compatibility run:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset mnist \
-  --legacy-diffusion \
-  --image_size 28 \
-  --diffusion_channels 1 \
-  --epochs 5
-```
-
-CIFAR10 ADM run:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset cifar10 \
-  --epochs 5 \
-  --image_size 64 \
-  --diffusion_channels 3 \
-  --base_channels 64 \
-  --time_dim 128 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --prediction_type v \
-  --attention-resolutions 16 8 \
-  --class_dropout_prob 0.1 \
-  --guidance_scale 3.0 \
-  --sampler ddim \
-  --sampling_steps 50 \
-  --grad_clip_norm 1.0 \
-  --amp_dtype auto \
-  --sample_count 8
-```
-
-Archived strict `64x64` RGB comparison run:
-
-```bash
-python3 train.py --config configs/diffusion/experimental/mnist_64.yaml \
-  --data-dir /scratch/$USER/image-reconstruction/data \
-  --output-dir /scratch/$USER/image-reconstruction-runs/experimental-parity
-```
-
-## Checkpoint Evaluation
-
-Phase 3 adds a separate [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py) entrypoint for checkpoint-only evaluation and sampling. The training path in [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) is unchanged.
-
-Primary generative metrics:
-
-- `FID` as the primary reported score
-- `Inception Score` as a secondary generative score
-- `LPIPS diversity` as a perceptual diversity signal across generated-image pairs
-
-Auxiliary paired metrics:
-
-- `PSNR`
-- `SSIM`
-
-Those paired metrics are still useful for denoising-style sanity checks, but they are not reported as the primary generative comparison.
-
-Evaluation command pattern:
-
-```bash
-python3 evaluate.py \
-  --checkpoint /path/to/checkpoints/best.pt \
-  --mode evaluate \
-  --num-generated-samples 1000 \
-  --eval-batch-size 64 \
-  --sampler ddim \
-  --sampling-steps 50 \
-  --ddim-eta 0.0 \
-  --guidance-scale 3.0 \
-  --artifact-sample-count 16 \
-  --cfg-comparison-scales 0 1 3 5 \
-  --amp-dtype auto
-```
-
-Sampling-only command pattern:
-
-```bash
-python3 evaluate.py \
-  --checkpoint /path/to/checkpoints/best.pt \
-  --mode sample \
-  --sampler ddim \
-  --sampling-steps 50 \
-  --guidance-scale 3.0 \
-  --artifact-sample-count 16 \
-  --save-raw-images
-```
-
-Notes:
-
-- `evaluate.py` defaults to saving results under `<training_run>/evaluations/`.
-- Real-image FID reference stats are cached under `<output_dir>/_reference_stats/` unless you override `--reference-stats-dir`.
-- The same dataset/image-size/channel preprocessing signature is used for both cached real stats and generated images.
-- When a checkpoint was trained from a study recipe, `evaluate.py` can reuse the checkpoint’s saved evaluation defaults such as `eval_batch_size`, `num_generated_samples`, and CFG comparison scales.
-- Grayscale checkpoints stay grayscale during training and sampling; grayscale-to-RGB conversion happens only inside the metric backends when FID, IS, or LPIPS need RGB inputs.
-- If the required torchvision model weights are not already cached locally, rerun on a login node with `--allow-model-download` once, then use the cached weights on compute nodes.
-
-## Aggregation
-
-Phase 4 adds [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py) to combine completed evaluation payloads into one comparison table.
-
-Example:
-
-```bash
-python3 aggregate_results.py \
-  /scratch/$USER/image-reconstruction-runs/final-study \
-  --output-dir /scratch/$USER/image-reconstruction-runs/final-study-reports/final_table
-```
-
-This writes:
-
-- `aggregated_results.json`
-- `aggregated_results.yaml`
-- `aggregated_results.csv`
-- `aggregated_results.md`
-- `comparison_table.md`
-
-## Slurm experiment
-
-Single Slurm-safe run:
-
-```bash
-python3 train.py \
-  --model diffusion \
-  --dataset mnist \
-  --epochs 25 \
-  --batch_size 256 \
-  --lr 1e-3 \
-  --seed 42 \
-  --data_dir /scratch/$USER/image-reconstruction/data \
-  --output_dir /scratch/$USER/image-reconstruction-runs \
-  --run_name slurm_job_${SLURM_JOB_ID} \
-  --num_workers 4 \
-  --timesteps 200 \
-  --base_channels 16 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --beta_start 1e-4 \
-  --beta_end 2e-2 \
-  --sample_count 16
-```
-
-For the curated HPC-friendly scripts, see [`slurm/README.md`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/README.md). The recommended order is:
-
-1. `sbatch slurm/test_diffusion.slurm`
-2. `sbatch slurm/array_diffusion_medium.slurm`
-3. `sbatch slurm/array_diffusion_large.slurm` only if the medium sweep behaves well and you want the heavier 1000-timestep study
-
-Example `sbatch` snippet:
-
-```bash
-#!/bin/bash
-#SBATCH --job-name=mnist-diffusion
-#SBATCH --gres=gpu:1
-#SBATCH --cpus-per-task=4
-#SBATCH --mem=16G
-#SBATCH --time=04:00:00
-#SBATCH --output=logs/%x-%j.out
-
-module load python
-source .venv/bin/activate
-
-python3 train.py \
-  --model diffusion \
-  --dataset mnist \
-  --epochs 25 \
-  --batch_size 256 \
-  --lr 1e-3 \
-  --seed 42 \
-  --data_dir /scratch/$USER/image-reconstruction/data \
-  --output_dir /scratch/$USER/image-reconstruction-runs \
-  --run_name job_${SLURM_JOB_ID} \
-  --num_workers ${SLURM_CPUS_PER_TASK:-4} \
-  --timesteps 200 \
-  --base_channels 16 \
-  --schedule cosine \
-  --ema_decay 0.999 \
-  --num_res_blocks 2 \
-  --sample_count 16
-```
-
-## Parameter sweeps
-
-Four-run sweep driven from the shell:
-
-```bash
-for seed in 1 2; do
-  for channels in 16 32; do
-    python3 train.py \
-      --model diffusion \
-      --dataset mnist \
-      --epochs 25 \
-      --batch_size 256 \
-      --lr 1e-3 \
-      --seed "${seed}" \
-      --data_dir /scratch/$USER/image-reconstruction/data \
-      --output_dir /scratch/$USER/image-reconstruction-runs \
-      --run_name seed${seed}_ch${channels} \
-      --num_workers 4 \
-      --timesteps 200 \
-      --base_channels "${channels}" \
-      --schedule cosine \
-      --ema_decay 0.999 \
-      --num_res_blocks 2 \
-      --sample_count 16
-  done
-done
-```
-
-You can also preserve the old multi-model behavior with:
-
-```bash
-python3 train.py --model all --dataset mnist
-```
-
-That runs each model as a separate isolated run directory.
-
-## Output structure
-
-Each run resolves to:
-
-```text
-{output_dir}/{dataset}/{model}/{run_name_or_auto_name}/
-```
-
-Example:
-
-```text
-/scratch/alice/image-reconstruction-runs/mnist/diffusion/mnist_diffusion_t200_ch16_bs256_lr1e-3_seed42_2026-04-11_153000_123456/
-```
-
-Each run directory contains:
-
-- `config.json`: resolved config and CLI args
-- `train.log`: batch-friendly file log
-- `metrics.jsonl`: epoch-by-epoch metrics
-- `metrics.json`: final summary
-- `kfold_results.csv`: compact summary CSV
-- `checkpoints/best.pt`: best model checkpoint, plus `ema_state_dict` when EMA is enabled
-- `plots/`: saved visuals such as `loss_curve.png`, diffusion `reconstructions.png`, and `diffusion_snapshots.png`
-- `samples/`: generated sample grids such as diffusion `generated_samples.png`
-
-For diffusion runs, successful jobs now always save visible artifacts in the run directory and also mirror the main images into the familiar legacy layout:
-
-- `plots/loss_curve.png`
-- `plots/reconstructions.png`
-- `plots/diffusion_snapshots.png`
-- `samples/generated_samples.png`
-- `outputs/diffusion/loss_curves/<run_name>.png`
-- `outputs/diffusion/reconstructions/<run_name>.png`
-- `outputs/diffusion/snapshots/<run_name>.png`
-- `outputs/diffusion/samples/<run_name>.png`
-
-That guarantee applies even to short smoke tests, so a 1-epoch Slurm validation run still leaves behind report/demo-friendly images.
-
-If a target run directory already exists, the trainer appends a numeric suffix instead of overwriting it.
 
 ## Notes
 
-- Use `--output_dir` to point Slurm jobs at scratch or project storage instead of the repo checkout.
-- `plot_kfold.py` now accepts `--results_csv` and `--output_path` so plotting can also target a specific run directory.
+- If a dataset is missing locally, add `--download` on a login node so
+  `train.py` can fetch it.
+- If a previous failed run left an incomplete deterministic output directory,
+  add `--clear-incomplete` before rerunning the same study command.
+- The first full evaluation on a machine may need `--allow-model-download` once
+  to cache metric weights.
+
+## Manual Use
+
+Manual training still works through [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py).
+The repo still keeps:
+
+- AE/DAE/VAE functionality for MNIST/Fashion-style runs
+- legacy diffusion support
+- ADM diffusion support
+- checkpoint-only evaluation via [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py)
+
+Example manual config runs:
+
+```bash
+python train.py --config configs/diffusion/mnist.yaml --data-dir /scratch/$USER/image-reconstruction/data
+python train.py --config configs/diffusion/fashion.yaml --data-dir /scratch/$USER/image-reconstruction/data
+python train.py --config configs/diffusion/cifar10.yaml --data-dir /scratch/$USER/image-reconstruction/data
+```

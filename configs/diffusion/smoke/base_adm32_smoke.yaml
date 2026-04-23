@@ -1,10 +1,10 @@
-config_name: base_adm64
+config_name: base_adm32_smoke
 model: diffusion
 diffusion_backbone: adm
 diffusion_preprocessing: default
-image_size: 64
+image_size: 32
 diffusion_channels: 3
-timesteps: 1000
+timesteps: 100
 base_channels: 64
 time_dim: 128
 schedule: cosine
@@ -14,38 +14,34 @@ ema_decay: 0.999
 num_res_blocks: 2
 prediction_type: v
 attention_resolutions:
-  - 16
   - 8
 class_dropout_prob: 0.1
 guidance_scale: 3.0
 sampler: ddim
-sampling_steps: 50
+sampling_steps: 20
 ddim_eta: 0.0
 grad_clip_norm: 1.0
 amp_dtype: auto
 download: false
-sample_count: 16
-eval_batch_size: 64
-eval_num_generated_samples: 1000
+epochs: 1
+sample_count: 4
+eval_batch_size: 32
+eval_num_generated_samples: 64
 eval_cfg_comparison_scales:
   - 0.0
-  - 1.0
   - 3.0
-  - 5.0
 protocol:
-  name: adm64_rgb_v1
+  name: adm32_rgb_smoke_v1
   description: >
-    Dataset-appropriate default recipe for 64x64 RGB natural-image diffusion
-    runs with the ADM backbone, centered on CIFAR10.
-  dataset_variant: adm64_rgb
+    Lightweight smoke-test recipe for the native 32x32 RGB ADM default path
+    used in the final diffusion study.
+  dataset_variant: adm32_rgb_smoke
   diffusion_preprocessing: default
-  eval_batch_size: 64
-  eval_num_generated_samples: 1000
+  eval_batch_size: 32
+  eval_num_generated_samples: 64
   eval_cfg_comparison_scales:
     - 0.0
-    - 1.0
     - 3.0
-    - 5.0
   locked_fields:
     - model
     - diffusion_backbone
@@ -84,4 +80,4 @@ protocol:
     - output_dir
     - run_name
     - download
-  default_use_case: cifar10_final_study
+  default_use_case: cifar10_final_study_native_smoke
