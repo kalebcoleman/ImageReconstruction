@@ -12,7 +12,7 @@ import socket
 import subprocess
 import sys
 import tempfile
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -36,12 +36,27 @@ try:
     from torchmetrics.image import StructuralSimilarityIndexMeasure
 except ModuleNotFoundError:
     StructuralSimilarityIndexMeasure = None
-from torchvision import datasets, transforms
 
+from diffusion.backbones.adm_unet import (
+    ADMUNet,
+    default_attention_resolutions,
+    default_channel_mults,
+)
+from diffusion.data import (
+    SUPPORTED_DATASET_CHOICES,
+    build_dataset,
+    describe_diffusion_preprocessing,
+    normalize_dataset_name as canonicalize_dataset_name,
+    resolve_dataset_spec,
+    resolve_diffusion_data_config,
+)
 from diffusion.ema import create_ema_model, select_eval_model
 from diffusion.model import DiffusionUNet
+from diffusion.recipes import apply_recipe_to_namespace
+from diffusion.reporting import save_manifest_bundle, save_yaml
+from diffusion.runtime import create_grad_scaler, format_resolved_amp_dtype
 from diffusion.sampling import sample_images
-from diffusion.scheduler import get_noise_schedule, predict_x0_from_noise, q_sample
+from diffusion.scheduler import get_noise_schedule, predict_x0_from_model_output, q_sample
 from diffusion.training import (
     _compute_batch_ssim,
     eval_diffusion_epoch,
@@ -55,27 +70,20 @@ import matplotlib.pyplot as plt
 
 LOGGER = logging.getLogger("image_reconstruction")
 CRITERION = nn.MSELoss()
-STANDARD_DATASET_TRANSFORM = transforms.ToTensor()
-DIFFUSION_DATASET_TRANSFORM = transforms.Compose(
-    [
-        transforms.ToTensor(),
-        transforms.Normalize((0.5,), (0.5,)),
-    ]
-)
-DATASET_CACHE: dict[tuple[str, bool, str, bool, str], datasets.VisionDataset] = {}
+DATASET_CACHE: dict[tuple[str, bool, str, bool, str], Dataset] = {}
 SUPPORTED_MODELS = ("ae", "dae", "vae", "diffusion")
-SUPPORTED_DATASETS: dict[str, type[datasets.VisionDataset]] = {
-    "mnist": datasets.MNIST,
-    "fashion": datasets.FashionMNIST,
-    "fashion-mnist": datasets.FashionMNIST,
-    "fashion_mnist": datasets.FashionMNIST,
-}
 
 
 @dataclass(frozen=True)
 class ExperimentConfig:
     model: str = "all"
     dataset: str = "mnist"
+    config_name: str | None = None
+    config_path: Path | None = None
+    protocol_name: str | None = None
+    dataset_variant: str | None = None
+    protocol_locked_fields: tuple[str, ...] | None = None
+    protocol_allowed_overrides: tuple[str, ...] | None = None
     epochs: int = 1
     batch_size: int = 8
     lr: float = 1e-3
@@ -86,6 +94,11 @@ class ExperimentConfig:
     num_workers: int = 0
     download: bool = False
     latent_dim: int = 8
+    diffusion_backbone: str = "adm"
+    diffusion_preprocessing: str = "default"
+    image_size: int | None = None
+    diffusion_channels: int | None = None
+    dataset_num_classes: int | None = None
     timesteps: int = 10
     base_channels: int = 8
     time_dim: int = 64
@@ -94,14 +107,33 @@ class ExperimentConfig:
     beta_end: float = 2e-2
     ema_decay: float = 0.0
     num_res_blocks: int = 1
+    class_dropout_prob: float = 0.1
+    guidance_scale: float = 1.0
+    prediction_type: str = "eps"
+    attention_resolutions: tuple[int, ...] | None = None
+    sampler: str = "ddpm"
+    sampling_steps: int | None = None
+    ddim_eta: float = 0.0
+    grad_clip_norm: float | None = 1.0
+    amp_dtype: str = "auto"
+    eval_batch_size: int | None = None
+    eval_num_generated_samples: int | None = None
+    eval_cfg_comparison_scales: tuple[float, ...] | None = None
+    protocol_metadata: dict[str, Any] = field(default_factory=dict)
     sample_count: int = 10
     n_splits: int = 2
     dae_noise_level: float = 0.2
     diffusion_log_interval: int = 250
 
 
-def parse_args() -> argparse.Namespace:
+def build_arg_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Train image reconstruction models.")
+    parser.add_argument(
+        "--config",
+        type=Path,
+        default=None,
+        help="Optional YAML experiment recipe. Recipe values apply first; explicit CLI flags still override them.",
+    )
     parser.add_argument(
         "--model",
         choices=(*SUPPORTED_MODELS, "all"),
@@ -116,14 +148,14 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--dataset",
-        choices=tuple(SUPPORTED_DATASETS),
+        choices=SUPPORTED_DATASET_CHOICES,
         default="mnist",
         help="Dataset to train on.",
     )
     parser.add_argument(
         "--datasets",
         nargs="+",
-        choices=tuple(SUPPORTED_DATASETS),
+        choices=SUPPORTED_DATASET_CHOICES,
         help="Compatibility alias for the old multi-dataset sweep interface.",
     )
     parser.add_argument("--epochs", type=int, default=ExperimentConfig.epochs)
@@ -134,6 +166,47 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output_dir", "--output-dir", dest="output_dir", type=Path, default=ExperimentConfig.output_dir)
     parser.add_argument("--run_name", "--run-name", dest="run_name", default=None)
     parser.add_argument("--num_workers", "--num-workers", "--workers", dest="num_workers", type=int, default=ExperimentConfig.num_workers)
+    parser.add_argument(
+        "--diffusion_backbone",
+        "--diffusion-backbone",
+        dest="diffusion_backbone",
+        choices=("adm", "legacy"),
+        default=ExperimentConfig.diffusion_backbone,
+        help="Diffusion backbone to use. 'adm' is the scalable default; 'legacy' preserves the old MNIST-style UNet.",
+    )
+    parser.add_argument(
+        "--legacy_diffusion",
+        "--legacy-diffusion",
+        dest="diffusion_backbone",
+        action="store_const",
+        const="legacy",
+        help="Compatibility alias that selects the old MNIST-style diffusion backend.",
+    )
+    parser.add_argument(
+        "--image_size",
+        "--image-size",
+        dest="image_size",
+        type=int,
+        default=ExperimentConfig.image_size,
+        help="Diffusion image size. Defaults to 64 for ADM and native dataset size for the legacy backend.",
+    )
+    parser.add_argument(
+        "--diffusion_channels",
+        "--diffusion-channels",
+        "--image_channels",
+        "--image-channels",
+        dest="diffusion_channels",
+        type=int,
+        default=ExperimentConfig.diffusion_channels,
+        help="Diffusion channel count. Defaults to 3 for ADM and native dataset channels for the legacy backend.",
+    )
+    parser.add_argument(
+        "--diffusion-preprocessing",
+        dest="diffusion_preprocessing",
+        choices=("default", "parity_64"),
+        default=ExperimentConfig.diffusion_preprocessing,
+        help="Dataset transform protocol for diffusion. 'default' preserves the current dataset-specific behavior; 'parity_64' locks the fair-comparison protocol.",
+    )
     parser.add_argument(
         "--download",
         action=argparse.BooleanOptionalAction,
@@ -183,6 +256,82 @@ def parse_args() -> argparse.Namespace:
         default=ExperimentConfig.num_res_blocks,
         help="Residual blocks per UNet stage for diffusion.",
     )
+    parser.add_argument(
+        "--prediction_type",
+        "--prediction-type",
+        "--pred-target",
+        dest="prediction_type",
+        choices=("eps", "v"),
+        default=ExperimentConfig.prediction_type,
+        help="Diffusion training target. 'eps' preserves the historical behavior; 'v' enables the improved parameterization.",
+    )
+    parser.add_argument(
+        "--attention_resolutions",
+        "--attention-resolutions",
+        dest="attention_resolutions",
+        nargs="*",
+        type=int,
+        default=None,
+        help="Optional list of spatial resolutions that should use self-attention, for example '--attention-resolutions 16 8'. Pass the flag with no values to disable attention.",
+    )
+    parser.add_argument(
+        "--class_dropout_prob",
+        "--class-dropout-prob",
+        dest="class_dropout_prob",
+        type=float,
+        default=ExperimentConfig.class_dropout_prob,
+        help="Classifier-free guidance label dropout probability for the ADM diffusion backend.",
+    )
+    parser.add_argument(
+        "--guidance_scale",
+        "--guidance-scale",
+        dest="guidance_scale",
+        type=float,
+        default=ExperimentConfig.guidance_scale,
+        help="Classifier-free guidance scale used for saved diffusion sample artifacts.",
+    )
+    parser.add_argument(
+        "--sampler",
+        "--sampling-method",
+        dest="sampler",
+        choices=("ddpm", "ddim"),
+        default=ExperimentConfig.sampler,
+        help="Sampler used for saved diffusion samples and reverse-process snapshots.",
+    )
+    parser.add_argument(
+        "--sampling_steps",
+        "--sampling-steps",
+        dest="sampling_steps",
+        type=int,
+        default=ExperimentConfig.sampling_steps,
+        help="Optional number of sampling steps. Omit for the sampler default. DDPM currently uses the full training schedule.",
+    )
+    parser.add_argument(
+        "--ddim_eta",
+        "--ddim-eta",
+        dest="ddim_eta",
+        type=float,
+        default=ExperimentConfig.ddim_eta,
+        help="DDIM stochasticity parameter. Use 0 for deterministic DDIM.",
+    )
+    parser.add_argument(
+        "--grad_clip_norm",
+        "--grad-clip-norm",
+        dest="grad_clip_norm",
+        type=float,
+        default=ExperimentConfig.grad_clip_norm,
+        help="Gradient clipping norm for diffusion training. Use 0 to disable clipping.",
+    )
+    parser.add_argument(
+        "--amp_dtype",
+        "--amp-dtype",
+        "--mixed-precision",
+        "--precision",
+        dest="amp_dtype",
+        choices=("auto", "none", "bf16", "fp16"),
+        default=ExperimentConfig.amp_dtype,
+        help="Automatic mixed precision mode for diffusion training and sampling.",
+    )
     parser.add_argument("--sample_count", "--sample-count", dest="sample_count", type=int, default=ExperimentConfig.sample_count)
     parser.add_argument("--n_splits", "--n-splits", dest="n_splits", type=int, default=ExperimentConfig.n_splits)
     parser.add_argument(
@@ -199,8 +348,10 @@ def parse_args() -> argparse.Namespace:
         type=float,
         default=ExperimentConfig.dae_noise_level,
     )
-    args = parser.parse_args()
+    return parser
 
+
+def validate_args(parser: argparse.ArgumentParser, args: argparse.Namespace) -> None:
     if args.epochs < 1:
         parser.error("--epochs must be at least 1")
     if args.batch_size < 1:
@@ -213,12 +364,28 @@ def parse_args() -> argparse.Namespace:
         parser.error("--timesteps must be at least 1")
     if args.base_channels < 1 or args.latent_dim < 1 or args.time_dim < 1:
         parser.error("--base_channels, --latent_dim, and --time_dim must be at least 1")
+    if args.image_size is not None and args.image_size < 8:
+        parser.error("--image_size must be at least 8")
+    if args.diffusion_channels is not None and args.diffusion_channels < 1:
+        parser.error("--diffusion_channels must be at least 1")
     if args.beta_start <= 0 or args.beta_end <= 0 or args.beta_end <= args.beta_start:
         parser.error("--beta_end must be greater than --beta_start, and both must be positive")
     if not 0.0 <= args.ema_decay < 1.0:
         parser.error("--ema_decay must be in [0, 1)")
     if args.num_res_blocks < 1:
         parser.error("--num_res_blocks must be at least 1")
+    if args.attention_resolutions is not None and any(resolution <= 0 for resolution in args.attention_resolutions):
+        parser.error("--attention_resolutions values must all be positive")
+    if not 0.0 <= args.class_dropout_prob < 1.0:
+        parser.error("--class_dropout_prob must be in [0, 1)")
+    if args.guidance_scale < 0.0:
+        parser.error("--guidance_scale must be non-negative")
+    if args.sampling_steps is not None and args.sampling_steps < 1:
+        parser.error("--sampling_steps must be at least 1")
+    if args.ddim_eta < 0.0:
+        parser.error("--ddim_eta must be non-negative")
+    if args.grad_clip_norm is not None and args.grad_clip_norm < 0.0:
+        parser.error("--grad_clip_norm must be non-negative")
     if args.sample_count < 1:
         parser.error("--sample_count must be at least 1")
     if args.dae_noise_level < 0:
@@ -228,14 +395,18 @@ def parse_args() -> argparse.Namespace:
     if args.lr <= 0:
         parser.error("--lr must be positive")
 
+
+def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
+    cli_args = list(sys.argv[1:] if argv is None else argv)
+    parser = build_arg_parser()
+    args = parser.parse_args(cli_args)
+    args = apply_recipe_to_namespace(args, parser=parser, argv=cli_args)
+    validate_args(parser, args)
     return args
 
 
 def normalize_dataset_name(dataset_name: str) -> str:
-    normalized = dataset_name.lower()
-    if normalized in {"fashion_mnist", "fashion-mnist"}:
-        return "fashion"
-    return normalized
+    return canonicalize_dataset_name(dataset_name)
 
 
 def resolve_selected_models(args: argparse.Namespace) -> list[str]:
@@ -256,6 +427,12 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
     return ExperimentConfig(
         model=args.model,
         dataset=normalize_dataset_name(args.dataset),
+        config_name=getattr(args, "config_name", None),
+        config_path=getattr(args, "config_path", getattr(args, "config", None)),
+        protocol_name=getattr(args, "protocol_name", None),
+        dataset_variant=getattr(args, "dataset_variant", None),
+        protocol_locked_fields=getattr(args, "protocol_locked_fields", None),
+        protocol_allowed_overrides=getattr(args, "protocol_allowed_overrides", None),
         epochs=args.epochs,
         batch_size=args.batch_size,
         lr=args.lr,
@@ -266,6 +443,10 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
         num_workers=args.num_workers,
         download=args.download,
         latent_dim=args.latent_dim,
+        diffusion_backbone=args.diffusion_backbone,
+        diffusion_preprocessing=args.diffusion_preprocessing,
+        image_size=args.image_size,
+        diffusion_channels=args.diffusion_channels,
         timesteps=args.timesteps,
         base_channels=args.base_channels,
         time_dim=args.time_dim,
@@ -274,6 +455,19 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
         beta_end=args.beta_end,
         ema_decay=args.ema_decay,
         num_res_blocks=args.num_res_blocks,
+        prediction_type=args.prediction_type,
+        attention_resolutions=tuple(args.attention_resolutions) if args.attention_resolutions is not None else None,
+        class_dropout_prob=args.class_dropout_prob,
+        guidance_scale=args.guidance_scale,
+        sampler=args.sampler,
+        sampling_steps=args.sampling_steps,
+        ddim_eta=args.ddim_eta,
+        grad_clip_norm=args.grad_clip_norm,
+        amp_dtype=args.amp_dtype,
+        eval_batch_size=getattr(args, "eval_batch_size", None),
+        eval_num_generated_samples=getattr(args, "eval_num_generated_samples", None),
+        eval_cfg_comparison_scales=getattr(args, "eval_cfg_comparison_scales", None),
+        protocol_metadata=getattr(args, "protocol_metadata", {}) or {},
         sample_count=args.sample_count,
         n_splits=args.n_splits,
         dae_noise_level=args.dae_noise_level,
@@ -282,6 +476,24 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
 
 
 def build_run_config(base_config: ExperimentConfig, dataset_name: str, model_name: str) -> ExperimentConfig:
+    dataset_spec = resolve_dataset_spec(dataset_name)
+    resolved_image_size = dataset_spec.native_image_size
+    resolved_channels = dataset_spec.native_channels
+    if is_diffusion(model_name):
+        resolved = resolve_diffusion_data_config(
+            dataset_name,
+            diffusion_backbone=base_config.diffusion_backbone,
+            image_size=base_config.image_size,
+            channels=base_config.diffusion_channels,
+        )
+        resolved_image_size = resolved.image_size
+        resolved_channels = resolved.channels
+    elif dataset_spec.native_channels != 1 or dataset_spec.native_image_size != 28:
+        raise ValueError(
+            f"{dataset_spec.name} is only supported for diffusion right now. "
+            "Use --model diffusion for CIFAR10/ImageNet runs."
+        )
+
     return ExperimentConfig(
         **{
             **asdict(base_config),
@@ -289,6 +501,9 @@ def build_run_config(base_config: ExperimentConfig, dataset_name: str, model_nam
             "model": model_name,
             "data_dir": Path(base_config.data_dir),
             "output_dir": Path(base_config.output_dir),
+            "image_size": resolved_image_size,
+            "diffusion_channels": resolved_channels,
+            "dataset_num_classes": dataset_spec.num_classes,
         }
     )
 
@@ -315,7 +530,10 @@ def auto_run_name(config: ExperimentConfig, timestamp: datetime) -> str:
     time_tag = timestamp.strftime("%Y-%m-%d_%H%M%S_%f")
     if config.model == "diffusion":
         return (
-            f"{config.dataset}_{config.model}_t{config.timesteps}_ch{config.base_channels}"
+            f"{config.dataset}_{config.model}_{config.diffusion_backbone}"
+            f"_im{config.image_size}_c{config.diffusion_channels}"
+            f"_{config.prediction_type}_{config.sampler}"
+            f"_t{config.timesteps}_ch{config.base_channels}"
             f"_bs{config.batch_size}_lr{lr_tag}_seed{config.seed}_{time_tag}"
         )
     return (
@@ -463,6 +681,7 @@ def save_config(config: ExperimentConfig, run_dir: Path, *, cli_args: list[str],
         config_payload["git_commit"] = git_commit
     config_path = run_dir / "config.json"
     config_path.write_text(json.dumps(config_payload, indent=2, sort_keys=True), encoding="utf-8")
+    save_yaml(run_dir / "config.yaml", config_payload)
     return config_path
 
 
@@ -487,38 +706,48 @@ def seed_everything(seed: int) -> None:
 
 
 def dataset_missing_error(dataset_name: str, data_dir: Path) -> FileNotFoundError:
+    dataset_spec = resolve_dataset_spec(dataset_name)
+    if dataset_spec.name == "imagenet":
+        imagenet_root = data_dir / (dataset_spec.storage_subdir or dataset_spec.name)
+        return FileNotFoundError(
+            "ImageNet was not found under "
+            f"{imagenet_root.resolve()}. Prepare train/ and val/ subdirectories "
+            "before launching diffusion jobs."
+        )
     return FileNotFoundError(
         f"{dataset_name.upper()} was not found under {data_dir.resolve()}. "
         "Pre-download the dataset on a login node or rerun with --download."
     )
 
 
-def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> datasets.VisionDataset:
+def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> Dataset:
     dataset_key = normalize_dataset_name(dataset_name)
-    dataset_class = SUPPORTED_DATASETS.get(dataset_key)
-    if dataset_class is None:
-        raise ValueError(f"Unsupported dataset: {dataset_name}")
-
     data_dir = Path(config.data_dir)
-    transform_name = "diffusion" if is_diffusion(config.model) else "standard"
-    transform = DIFFUSION_DATASET_TRANSFORM if is_diffusion(config.model) else STANDARD_DATASET_TRANSFORM
+    transform_name = (
+        f"diffusion_{config.image_size}_{config.diffusion_channels}_{config.diffusion_preprocessing}"
+        if is_diffusion(config.model)
+        else "standard"
+    )
     cache_key = (dataset_key, train, str(data_dir.resolve()), config.download, transform_name)
     if cache_key in DATASET_CACHE:
         return DATASET_CACHE[cache_key]
 
-    if config.download:
-        data_dir.mkdir(parents=True, exist_ok=True)
-
     try:
-        dataset = dataset_class(
-            root=str(data_dir),
+        dataset = build_dataset(
+            dataset_key,
+            root=data_dir,
             train=train,
+            diffusion=is_diffusion(config.model),
+            image_size=config.image_size if is_diffusion(config.model) else None,
+            channels=config.diffusion_channels if is_diffusion(config.model) else None,
+            preprocessing_protocol=config.diffusion_preprocessing if is_diffusion(config.model) else "default",
             download=config.download,
-            transform=transform,
         )
-    except RuntimeError as exc:
+    except (FileNotFoundError, RuntimeError) as exc:
         message = str(exc).lower()
         if not config.download and ("dataset not found" in message or "not found" in message):
+            raise dataset_missing_error(dataset_key, data_dir) from exc
+        if dataset_key == "imagenet" and isinstance(exc, FileNotFoundError):
             raise dataset_missing_error(dataset_key, data_dir) from exc
         raise
 
@@ -802,13 +1031,33 @@ def diffusion_to_display_range(images: torch.Tensor) -> torch.Tensor:
     return ((images.detach().cpu().float() + 1.0) / 2.0).clamp(0.0, 1.0)
 
 
+def image_for_plot(image: torch.Tensor) -> tuple[np.ndarray, dict[str, Any]]:
+    """Convert a CHW tensor into a matplotlib-friendly image plus render kwargs."""
+
+    if image.ndim != 3:
+        raise ValueError(f"Expected a CHW image tensor, got shape {tuple(image.shape)}.")
+
+    if image.shape[0] == 1:
+        return image.squeeze(0).numpy(), {"cmap": "gray", "vmin": 0.0, "vmax": 1.0}
+    if image.shape[0] >= 3:
+        return image[:3].permute(1, 2, 0).clamp(0.0, 1.0).numpy(), {}
+    raise ValueError(f"Unsupported channel count for plotting: {image.shape[0]}.")
+
+
+def render_image(axis: Any, image: torch.Tensor) -> None:
+    """Render either grayscale or RGB tensors without hardcoding one display mode."""
+
+    plot_image, render_kwargs = image_for_plot(image.detach().cpu().float())
+    axis.imshow(plot_image, **render_kwargs)
+
+
 def plot_image_row(images: torch.Tensor, save_path: Path, title: str) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     num_images = images.shape[0]
     figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
     axes = np.atleast_1d(axes)
     for axis, image in zip(axes, images):
-        axis.imshow(image.squeeze(), cmap="gray")
+        render_image(axis, prepare_display_images(image.unsqueeze(0))[0])
         axis.axis("off")
     figure.suptitle(title)
     figure.tight_layout()
@@ -829,7 +1078,7 @@ def plot_image_grid(images: torch.Tensor, save_path: Path, title: str, *, num_co
         axis = axes_array.flat[image_idx]
         axis.axis("off")
         if image_idx < num_images:
-            axis.imshow(images[image_idx].squeeze(), cmap="gray")
+            render_image(axis, images[image_idx])
 
     figure.suptitle(title)
     figure.tight_layout()
@@ -1003,9 +1252,17 @@ def plot_diffusion_snapshots(
     device: torch.device,
     *,
     dataset_name: str,
+    image_shape: tuple[int, int, int],
     base_channels: int,
     save_path: Path,
     num_samples: int,
+    sample_labels: torch.Tensor | None = None,
+    guidance_scale: float = 1.0,
+    prediction_type: str = "eps",
+    sampler_name: str = "ddpm",
+    sampling_steps: int | None = None,
+    ddim_eta: float = 0.0,
+    amp_dtype: str = "none",
     num_snapshots: int = 9,
 ) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1014,6 +1271,14 @@ def plot_diffusion_snapshots(
         scheduler,
         device,
         num_samples=num_samples,
+        image_shape=image_shape,
+        labels=sample_labels,
+        guidance_scale=guidance_scale,
+        prediction_type=prediction_type,
+        sampler_name=sampler_name,
+        sampling_steps=sampling_steps,
+        ddim_eta=ddim_eta,
+        amp_dtype=amp_dtype,
         return_intermediate=True,
         num_snapshots=num_snapshots,
     )
@@ -1029,14 +1294,14 @@ def plot_diffusion_snapshots(
         display_images = prepare_display_images(diffusion_to_display_range(images), rescale=True)
         for col_idx in range(num_samples):
             axis = axes[row_idx, col_idx]
-            axis.imshow(display_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
+            render_image(axis, display_images[col_idx])
             axis.axis("off")
             if col_idx == 0:
                 axis.set_ylabel(f"t={step_num}", rotation=0, labelpad=24, va="center", fontsize=9, fontweight="bold")
 
     figure.suptitle(
         f"Reverse Diffusion Process (Noise -> Image)\n"
-        f"{dataset_name.upper()} | Base Channels = {base_channels}",
+        f"{dataset_name.upper()} | Base Width = {base_channels} | Sample Shape = {image_shape} | {prediction_type}/{sampler_name}",
         fontsize=13,
     )
     figure.tight_layout()
@@ -1052,15 +1317,17 @@ def plot_diffusion_reconstructions(
     *,
     dataset_name: str,
     base_channels: int,
+    prediction_type: str,
     save_path: Path,
     num_images: int = 8,
 ) -> None:
     save_path.parent.mkdir(parents=True, exist_ok=True)
     model.eval()
 
-    clean_images, _ = next(iter(loader))
+    clean_images, labels = next(iter(loader))
     num_images = min(num_images, clean_images.shape[0])
     clean_images = clean_images[:num_images].to(device)
+    labels = labels[:num_images].to(device)
 
     preview_step = max(1, scheduler.num_timesteps // 2)
     timesteps = torch.full((num_images,), preview_step, device=device, dtype=torch.long)
@@ -1068,12 +1335,13 @@ def plot_diffusion_reconstructions(
     noisy_images = q_sample(clean_images, timesteps, noise, scheduler)
 
     with torch.no_grad():
-        predicted_noise = model(noisy_images, timesteps)
-        reconstructed_images = predict_x0_from_noise(
+        model_output = model(noisy_images, timesteps, labels)
+        reconstructed_images = predict_x0_from_model_output(
             noisy_images,
             timesteps,
-            predicted_noise,
+            model_output,
             scheduler,
+            prediction_type,
         ).clamp(-1.0, 1.0)
 
     clean_images = diffusion_to_display_range(clean_images)
@@ -1087,13 +1355,13 @@ def plot_diffusion_reconstructions(
     for row_idx, (row_title, row_images) in enumerate(zip(row_titles, image_rows)):
         for col_idx in range(num_images):
             axis = axes[row_idx, col_idx]
-            axis.imshow(row_images[col_idx].squeeze(), cmap="gray", vmin=0.0, vmax=1.0)
+            render_image(axis, row_images[col_idx])
             axis.axis("off")
             if col_idx == 0:
                 axis.set_title(row_title)
 
     figure.suptitle(
-        f"Diffusion Reconstruction Preview ({dataset_name.upper()}, Channels={base_channels})",
+        f"Diffusion Reconstruction Preview ({dataset_name.upper()}, Base Width={base_channels}, {prediction_type})",
         fontsize=13,
     )
     figure.tight_layout()
@@ -1108,11 +1376,34 @@ def instantiate_model(config: ExperimentConfig, device: torch.device) -> tuple[n
     elif config.model in ("ae", "dae"):
         model = FullyConnectedAutoencoder(latent_dim=config.latent_dim).to(device)
     elif is_diffusion(config.model):
-        model = DiffusionUNet(
-            base_channels=config.base_channels,
-            time_dim=config.time_dim,
-            num_res_blocks=config.num_res_blocks,
-        ).to(device)
+        if config.image_size is None or config.diffusion_channels is None:
+            raise ValueError("Diffusion config must resolve image_size and diffusion_channels before instantiation.")
+        if config.diffusion_backbone == "legacy":
+            model = DiffusionUNet(
+                in_channels=config.diffusion_channels,
+                base_channels=config.base_channels,
+                time_dim=config.time_dim,
+                num_res_blocks=config.num_res_blocks,
+            ).to(device)
+        elif config.diffusion_backbone == "adm":
+            attention_resolutions = (
+                config.attention_resolutions
+                if config.attention_resolutions is not None
+                else default_attention_resolutions(config.image_size, config.dataset)
+            )
+            model = ADMUNet(
+                in_channels=config.diffusion_channels,
+                image_size=config.image_size,
+                base_channels=config.base_channels,
+                time_dim=config.time_dim,
+                num_res_blocks=config.num_res_blocks,
+                channel_mult=default_channel_mults(config.image_size),
+                attention_resolutions=attention_resolutions,
+                num_classes=config.dataset_num_classes,
+                class_dropout_prob=config.class_dropout_prob,
+            ).to(device)
+        else:  # pragma: no cover - guarded by argparse.
+            raise ValueError(f"Unsupported diffusion backbone: {config.diffusion_backbone}")
         scheduler = get_noise_schedule(
             config.timesteps,
             device,
@@ -1146,17 +1437,38 @@ def log_run_header(config: ExperimentConfig, run_paths: dict[str, Path], device:
         config.num_workers,
     )
     if is_diffusion(config.model):
+        attention_resolutions = (
+            config.attention_resolutions
+            if config.attention_resolutions is not None
+            else default_attention_resolutions(config.image_size, config.dataset)
+        )
         LOGGER.info(
-            "Model hyperparameters: base_channels=%d time_dim=%d num_res_blocks=%d timesteps=%d "
-            "schedule=%s beta_start=%g beta_end=%g ema_decay=%g sample_count=%d",
+            "Model hyperparameters: backbone=%s image_size=%s channels=%s classes=%s "
+            "base_channels=%d time_dim=%d num_res_blocks=%d timesteps=%d "
+            "schedule=%s prediction_type=%s sampler=%s sampling_steps=%s ddim_eta=%g "
+            "attention_resolutions=%s beta_start=%g beta_end=%g ema_decay=%g class_dropout_prob=%g guidance_scale=%g "
+            "grad_clip_norm=%s amp=%s sample_count=%d",
+            config.diffusion_backbone,
+            config.image_size,
+            config.diffusion_channels,
+            config.dataset_num_classes,
             config.base_channels,
             config.time_dim,
             config.num_res_blocks,
             config.timesteps,
             config.schedule,
+            config.prediction_type,
+            config.sampler,
+            config.sampling_steps,
+            config.ddim_eta,
+            attention_resolutions,
             config.beta_start,
             config.beta_end,
             config.ema_decay,
+            config.class_dropout_prob,
+            config.guidance_scale,
+            config.grad_clip_norm,
+            format_resolved_amp_dtype(config.amp_dtype, device),
             config.sample_count,
         )
     else:
@@ -1209,6 +1521,23 @@ def save_run_summary_csv(path: Path, summary: dict[str, Any]) -> None:
 
 def count_trainable_parameters(model: nn.Module) -> int:
     return sum(parameter.numel() for parameter in model.parameters() if parameter.requires_grad)
+
+
+def build_diffusion_sample_labels(
+    config: ExperimentConfig,
+    num_samples: int,
+    device: torch.device,
+) -> torch.Tensor | None:
+    """Create a simple class-balanced label batch for diffusion sample previews."""
+
+    if (
+        not is_diffusion(config.model)
+        or config.diffusion_backbone != "adm"
+        or config.dataset_num_classes is None
+        or config.dataset_num_classes < 1
+    ):
+        return None
+    return torch.arange(num_samples, device=device, dtype=torch.long) % config.dataset_num_classes
 
 
 def log_artifact_saved(label: str, path: Path) -> str:
@@ -1287,6 +1616,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     for fold_idx, train_loader, eval_loader, val_indices in experiment_splits:
         model, scheduler = instantiate_model(config, device)
         ema_model = create_ema_model(model) if diffusion_uses_ema else None
+        grad_scaler = create_grad_scaler(config.amp_dtype, device) if is_diffusion(config.model) else None
         model_parameter_count = count_trainable_parameters(model)
         if fold_idx == 1:
             LOGGER.info("Trainable parameters: %d", model_parameter_count)
@@ -1302,8 +1632,12 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                     optimizer,
                     scheduler,
                     device,
+                    prediction_type=config.prediction_type,
                     ema_model=ema_model,
                     ema_decay=config.ema_decay,
+                    amp_dtype=config.amp_dtype,
+                    grad_clip_norm=config.grad_clip_norm,
+                    grad_scaler=grad_scaler,
                     progress_label=f"[{config.dataset.upper()} | {config.model.upper()} | Fold {fold_idx}]",
                     progress_interval=config.diffusion_log_interval,
                 )
@@ -1313,6 +1647,8 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                     eval_loader,
                     scheduler,
                     device,
+                    prediction_type=config.prediction_type,
+                    amp_dtype=config.amp_dtype,
                     progress_label=f"[{config.dataset.upper()} | {config.model.upper()} | Fold {fold_idx}]",
                     progress_interval=config.diffusion_log_interval,
                     eval_split_name="Test",
@@ -1361,7 +1697,14 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
 
         if is_diffusion(config.model):
             eval_model = select_eval_model(model, ema_model)
-            metrics = evaluate_diffusion_metrics(eval_model, eval_loader, scheduler, device)
+            metrics = evaluate_diffusion_metrics(
+                eval_model,
+                eval_loader,
+                scheduler,
+                device,
+                prediction_type=config.prediction_type,
+                amp_dtype=config.amp_dtype,
+            )
             metrics["noise_mse"] = val_losses[-1]
             metrics["evaluation_weights"] = "ema" if ema_model is not None else "model"
         else:
@@ -1406,8 +1749,48 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     all_ssim = [entry["ssim"] for entry in fold_metrics]
     final_summary = {
         "dataset": config.dataset,
+        "config_name": config.config_name,
+        "config_path": str(config.config_path.resolve()) if config.config_path is not None else None,
+        "protocol_name": config.protocol_name,
+        "dataset_variant": config.dataset_variant,
         "model": config.model,
         "run_name": run_paths["root"].name,
+        "diffusion_backbone": config.diffusion_backbone if is_diffusion(config.model) else None,
+        "diffusion_preprocessing": config.diffusion_preprocessing if is_diffusion(config.model) else None,
+        "image_size": config.image_size if is_diffusion(config.model) else None,
+        "diffusion_channels": config.diffusion_channels if is_diffusion(config.model) else None,
+        "dataset_num_classes": config.dataset_num_classes if is_diffusion(config.model) else None,
+        "prediction_type": config.prediction_type if is_diffusion(config.model) else None,
+        "sampler": config.sampler if is_diffusion(config.model) else None,
+        "sampling_steps": config.sampling_steps if is_diffusion(config.model) else None,
+        "ddim_eta": config.ddim_eta if is_diffusion(config.model) else None,
+        "eval_batch_size": config.eval_batch_size if is_diffusion(config.model) else None,
+        "eval_num_generated_samples": config.eval_num_generated_samples if is_diffusion(config.model) else None,
+        "eval_cfg_comparison_scales": (
+            list(config.eval_cfg_comparison_scales)
+            if is_diffusion(config.model) and config.eval_cfg_comparison_scales is not None
+            else None
+        ),
+        "attention_resolutions": (
+            list(config.attention_resolutions)
+            if is_diffusion(config.model) and config.attention_resolutions is not None
+            else None
+        ),
+        "protocol_locked_fields": list(config.protocol_locked_fields) if config.protocol_locked_fields is not None else None,
+        "protocol_allowed_overrides": list(config.protocol_allowed_overrides) if config.protocol_allowed_overrides is not None else None,
+        "protocol_metadata": json_ready(config.protocol_metadata) if config.protocol_metadata else {},
+        "preprocessing_description": (
+            describe_diffusion_preprocessing(
+                config.dataset,
+                image_size=config.image_size,
+                channels=config.diffusion_channels,
+                preprocessing_protocol=config.diffusion_preprocessing,
+            )
+            if is_diffusion(config.model)
+            else None
+        ),
+        "grad_clip_norm": config.grad_clip_norm if is_diffusion(config.model) else None,
+        "amp_dtype": format_resolved_amp_dtype(config.amp_dtype, device) if is_diffusion(config.model) else None,
         "mean_loss": float(np.mean(all_losses)),
         "std_loss": float(np.std(all_losses)),
         "psnr": mean_metric(all_psnr),
@@ -1422,6 +1805,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         "evaluation_weights": "ema" if best_ema_state is not None else "model",
         "artifacts": {
             "config": str(config_path.resolve()),
+            "config_yaml": str((run_paths["root"] / "config.yaml").resolve()),
             "log": str((run_paths["root"] / "train.log").resolve()),
             "metrics_jsonl": str(metrics_jsonl_path.resolve()),
         },
@@ -1448,6 +1832,12 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     if is_diffusion(config.model):
         eval_dataset = get_dataset(config, config.dataset, train=False)
         best_eval_loader = create_loader(eval_dataset, config, shuffle=False)
+        image_shape = (
+            config.diffusion_channels,
+            config.image_size,
+            config.image_size,
+        )
+        sample_labels = build_diffusion_sample_labels(config, config.sample_count, device)
         loss_curve_path = run_paths["plots"] / "loss_curve.png"
         logged_loss_curve_paths = save_and_log_artifact(
             "Diffusion loss curve",
@@ -1456,7 +1846,11 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 best_payload["train_losses"],
                 best_payload["val_losses"],
                 target,
-                title=f"Diffusion Training Loss ({config.dataset.upper()}, Channels={config.base_channels})",
+                title=(
+                    f"Diffusion Training Loss ({config.dataset.upper()}, {config.diffusion_backbone}, "
+                    f"{config.image_size}x{config.image_size}, C={config.diffusion_channels}, "
+                    f"{config.prediction_type}, {config.sampler})"
+                ),
                 y_label="MSE Loss",
             ),
             legacy_path=legacy_paths["loss_curve"],
@@ -1467,6 +1861,14 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             best_scheduler,
             device,
             num_samples=config.sample_count,
+            image_shape=image_shape,
+            labels=sample_labels,
+            guidance_scale=config.guidance_scale,
+            prediction_type=config.prediction_type,
+            sampler_name=config.sampler,
+            sampling_steps=config.sampling_steps,
+            ddim_eta=config.ddim_eta,
+            amp_dtype=config.amp_dtype,
         )
         logged_sample_paths = save_and_log_artifact(
             "Diffusion sample grid",
@@ -1474,7 +1876,11 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             lambda target: plot_image_grid(
                 generated_samples,
                 target,
-                title=f"Diffusion Samples ({config.dataset.upper()}, Channels={config.base_channels})",
+                title=(
+                    f"Diffusion Samples ({config.dataset.upper()}, {config.diffusion_backbone}, "
+                    f"{config.image_size}x{config.image_size}, C={config.diffusion_channels}, "
+                    f"{config.prediction_type}, {config.sampler})"
+                ),
             ),
             legacy_path=legacy_paths["samples"],
         )
@@ -1487,9 +1893,21 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 best_scheduler,
                 device,
                 dataset_name=config.dataset,
+                image_shape=image_shape,
                 base_channels=config.base_channels,
                 save_path=target,
                 num_samples=min(config.sample_count, 8),
+                sample_labels=(
+                    sample_labels[: min(config.sample_count, 8)]
+                    if sample_labels is not None
+                    else None
+                ),
+                guidance_scale=config.guidance_scale,
+                prediction_type=config.prediction_type,
+                sampler_name=config.sampler,
+                sampling_steps=config.sampling_steps,
+                ddim_eta=config.ddim_eta,
+                amp_dtype=config.amp_dtype,
             ),
             legacy_path=legacy_paths["snapshots"],
         )
@@ -1504,6 +1922,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
                 device,
                 dataset_name=config.dataset,
                 base_channels=config.base_channels,
+                prediction_type=config.prediction_type,
                 save_path=target,
                 num_images=min(config.sample_count, 8),
             ),
@@ -1561,6 +1980,17 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
     summary_csv_path = run_paths["root"] / "kfold_results.csv"
     save_run_summary_csv(summary_csv_path, final_summary)
     final_summary["artifacts"]["summary_csv"] = str(summary_csv_path.resolve())
+    manifest_payload = {
+        "config": json_ready(asdict(config)),
+        "summary": json_ready(final_summary),
+    }
+    manifest_paths = save_manifest_bundle(
+        run_paths["root"],
+        basename="run_manifest",
+        title=f"Run Manifest: {run_paths['root'].name}",
+        payload=manifest_payload,
+    )
+    final_summary["artifacts"]["run_manifest"] = manifest_paths
     save_metrics_json(metrics_json_path, final_summary)
 
     LOGGER.info(

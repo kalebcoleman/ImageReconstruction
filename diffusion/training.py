@@ -13,22 +13,41 @@ try:
 except ModuleNotFoundError:  # pragma: no cover - fallback used in lean envs.
     StructuralSimilarityIndexMeasure = None
 
+from diffusion.runtime import autocast_context
 from diffusion.ema import update_ema_model
-from diffusion.scheduler import DiffusionSchedule, predict_x0_from_noise, q_sample
+from diffusion.scheduler import (
+    DiffusionSchedule,
+    get_diffusion_target,
+    predict_x0_from_model_output,
+    q_sample,
+)
 
 
 LOGGER = logging.getLogger(__name__)
 
 
 def _move_batch_to_device(
-    batch: tuple[torch.Tensor, ...],
+    batch: tuple[torch.Tensor, ...] | torch.Tensor,
     device: torch.device,
-) -> tuple[torch.Tensor, ...]:
+) -> tuple[torch.Tensor, ...] | torch.Tensor:
     """Move every tensor in a batch tuple onto the active compute device."""
+
+    if torch.is_tensor(batch):
+        return batch.to(device, non_blocking=True)
     return tuple(
         item.to(device, non_blocking=True) if torch.is_tensor(item) else item
         for item in batch
     )
+
+
+def _unpack_diffusion_batch(batch: tuple[torch.Tensor, ...] | torch.Tensor) -> tuple[torch.Tensor, torch.Tensor | None]:
+    """Return images plus an optional label tensor from a diffusion batch."""
+
+    if torch.is_tensor(batch):
+        return batch, None
+    if len(batch) == 1:
+        return batch[0], None
+    return batch[0], batch[1]
 
 
 def _sample_timesteps(batch_size: int, schedule: DiffusionSchedule, device: torch.device) -> torch.Tensor:
@@ -40,6 +59,19 @@ def _sample_timesteps(batch_size: int, schedule: DiffusionSchedule, device: torc
         device=device,
         dtype=torch.long,
     )
+
+
+def _validate_diffusion_shapes(
+    predicted_noise: torch.Tensor,
+    target_noise: torch.Tensor,
+) -> None:
+    """Ensure the denoiser returns the same image shape as the diffusion target."""
+
+    if predicted_noise.shape != target_noise.shape:
+        raise ValueError(
+            "Diffusion model output shape must match the training target. "
+            f"Expected {tuple(target_noise.shape)}, got {tuple(predicted_noise.shape)}."
+        )
 
 
 def _compute_psnr(mse: float) -> float:
@@ -87,8 +119,12 @@ def train_diffusion_epoch(
     optimizer: Optimizer,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    prediction_type: str = "eps",
     ema_model: torch.nn.Module | None = None,
     ema_decay: float = 0.0,
+    amp_dtype: str = "none",
+    grad_clip_norm: float | None = None,
+    grad_scaler: torch.cuda.amp.GradScaler | None = None,
     progress_label: str | None = None,
     progress_interval: int | None = None,
 ) -> float:
@@ -102,20 +138,35 @@ def train_diffusion_epoch(
 
     model.train()
     running_loss = 0.0
+    scaler_enabled = grad_scaler is not None and grad_scaler.is_enabled()
 
     total_batches = max(len(loader), 1)
 
     for batch_idx, batch in enumerate(loader, start=1):
-        images, _ = _move_batch_to_device(batch, device)
+        images, labels = _unpack_diffusion_batch(_move_batch_to_device(batch, device))
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
         noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
+        target = get_diffusion_target(images, noise, timesteps, scheduler, prediction_type)
 
         optimizer.zero_grad(set_to_none=True)
-        predicted_noise = model(noisy_images, timesteps)
-        loss = F.mse_loss(predicted_noise, noise)
-        loss.backward()
-        optimizer.step()
+        with autocast_context(amp_dtype, device):
+            model_output = model(noisy_images, timesteps, labels)
+            _validate_diffusion_shapes(model_output, target)
+            loss = F.mse_loss(model_output, target)
+
+        if scaler_enabled:
+            grad_scaler.scale(loss).backward()
+            if grad_clip_norm is not None and grad_clip_norm > 0.0:
+                grad_scaler.unscale_(optimizer)
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+            grad_scaler.step(optimizer)
+            grad_scaler.update()
+        else:
+            loss.backward()
+            if grad_clip_norm is not None and grad_clip_norm > 0.0:
+                torch.nn.utils.clip_grad_norm_(model.parameters(), grad_clip_norm)
+            optimizer.step()
         if ema_model is not None:
             update_ema_model(ema_model, model, ema_decay)
 
@@ -137,6 +188,8 @@ def eval_diffusion_epoch(
     loader: DataLoader,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    prediction_type: str = "eps",
+    amp_dtype: str = "none",
     progress_label: str | None = None,
     progress_interval: int | None = None,
     eval_split_name: str = "Val",
@@ -149,12 +202,16 @@ def eval_diffusion_epoch(
     total_batches = max(len(loader), 1)
 
     for batch_idx, batch in enumerate(loader, start=1):
-        images, _ = _move_batch_to_device(batch, device)
+        images, labels = _unpack_diffusion_batch(_move_batch_to_device(batch, device))
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
         noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
-        predicted_noise = model(noisy_images, timesteps)
-        running_loss += F.mse_loss(predicted_noise, noise).item()
+        target = get_diffusion_target(images, noise, timesteps, scheduler, prediction_type)
+        with autocast_context(amp_dtype, device):
+            model_output = model(noisy_images, timesteps, labels)
+            _validate_diffusion_shapes(model_output, target)
+            batch_loss = F.mse_loss(model_output, target)
+        running_loss += batch_loss.item()
 
         if progress_label and _should_log_progress(batch_idx, total_batches, progress_interval):
             average_loss = running_loss / batch_idx
@@ -172,6 +229,8 @@ def evaluate_diffusion_metrics(
     loader: DataLoader,
     scheduler: DiffusionSchedule,
     device: torch.device,
+    prediction_type: str = "eps",
+    amp_dtype: str = "none",
 ) -> dict[str, float]:
     """Estimate reconstruction-style metrics from denoising predictions.
 
@@ -189,16 +248,19 @@ def evaluate_diffusion_metrics(
     num_batches = 0
 
     for batch in loader:
-        images, _ = _move_batch_to_device(batch, device)
+        images, labels = _unpack_diffusion_batch(_move_batch_to_device(batch, device))
         timesteps = _sample_timesteps(images.shape[0], scheduler, device)
         noise = torch.randn(images.shape, device=device, dtype=images.dtype)
         noisy_images = q_sample(images, timesteps, noise, scheduler)
-        predicted_noise = model(noisy_images, timesteps)
-        reconstructed = predict_x0_from_noise(
+        with autocast_context(amp_dtype, device):
+            model_output = model(noisy_images, timesteps, labels)
+            _validate_diffusion_shapes(model_output, noise)
+        reconstructed = predict_x0_from_model_output(
             noisy_images,
             timesteps,
-            predicted_noise,
+            model_output,
             scheduler,
+            prediction_type,
         ).clamp(-1.0, 1.0)
 
         reconstructed_for_metrics = _diffusion_to_display_range(reconstructed)

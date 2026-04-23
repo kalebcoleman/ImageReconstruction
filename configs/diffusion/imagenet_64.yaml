@@ -1,0 +1,16 @@
+inherits:
+  - base_adm64.yaml
+config_name: imagenet_64
+dataset: imagenet
+dataset_variant: imagenet_64_protocol_unvalidated
+epochs: 20
+batch_size: 32
+num_workers: 8
+eval_batch_size: 32
+protocol:
+  dataset_variant: imagenet_64_protocol_unvalidated
+  validation_status: >
+    This recipe defines the parity protocol for ImageNet-style 64x64 runs, but
+    the repository does not claim a validated full-ImageNet benchmark result in
+    this phase. Point data_dir at either a full ImageNet train/val tree or a
+    clearly documented ImageNet-64-compatible subset laid out as ImageFolder.

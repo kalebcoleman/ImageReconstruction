@@ -1,0 +1,9 @@
+inherits:
+  - base_adm64.yaml
+config_name: cifar10_64
+dataset: cifar10
+dataset_variant: cifar10_64_rgb_parity
+epochs: 50
+batch_size: 64
+num_workers: 4
+eval_batch_size: 64

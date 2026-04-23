@@ -98,6 +98,8 @@ load_cluster_modules() {
 normalize_dataset_name() {
   case "$1" in
     fashion-mnist|fashion_mnist) printf '%s\n' "fashion" ;;
+    cifar|cifar-10|cifar_10) printf '%s\n' "cifar10" ;;
+    ilsvrc|ilsvrc2012) printf '%s\n' "imagenet" ;;
     *) printf '%s\n' "$1" ;;
   esac
 }
@@ -106,6 +108,8 @@ dataset_cache_dir_for() {
   case "$(normalize_dataset_name "$1")" in
     mnist) printf '%s\n' "MNIST" ;;
     fashion) printf '%s\n' "FashionMNIST" ;;
+    cifar10) printf '%s\n' "cifar-10-batches-py" ;;
+    imagenet) printf '%s\n' "imagenet" ;;
     *)
       echo "Unsupported dataset for cache preflight: $1" >&2
       exit 1
@@ -125,6 +129,15 @@ ensure_dataset_ready() {
 
   local expected_dataset_dir
   expected_dataset_dir="$(dataset_cache_dir_for "${dataset}")"
+  if [[ "$(normalize_dataset_name "${dataset}")" == "imagenet" ]]; then
+    if [[ ! -d "${data_dir}/${expected_dataset_dir}/train" || ! -d "${data_dir}/${expected_dataset_dir}/val" ]]; then
+      echo "ImageNet cache missing at ${data_dir}/${expected_dataset_dir}/{train,val}" >&2
+      echo "Prepare the ImageNet train/ and val/ folders on shared storage before launching the job." >&2
+      exit 1
+    fi
+    return
+  fi
+
   if [[ ! -d "${data_dir}/${expected_dataset_dir}" ]]; then
     echo "Dataset cache missing at ${data_dir}/${expected_dataset_dir}" >&2
     echo "Populate the dataset on shared storage first, or resubmit with DOWNLOAD=1." >&2

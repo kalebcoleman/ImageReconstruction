@@ -15,6 +15,7 @@ class DiffusionSchedule:
     betas: torch.Tensor
     alphas: torch.Tensor
     alpha_hat: torch.Tensor
+    alpha_hat_previous: torch.Tensor
     sqrt_alpha_hat: torch.Tensor
     sqrt_one_minus_alpha_hat: torch.Tensor
     sqrt_recip_alpha: torch.Tensor
@@ -67,6 +68,7 @@ def get_noise_schedule(
         betas=betas,
         alphas=alphas,
         alpha_hat=alpha_hat,
+        alpha_hat_previous=alpha_hat_previous,
         sqrt_alpha_hat=torch.sqrt(alpha_hat),
         sqrt_one_minus_alpha_hat=torch.sqrt(1.0 - alpha_hat),
         sqrt_recip_alpha=torch.sqrt(1.0 / alphas),
@@ -109,6 +111,115 @@ def q_sample(
         x0,
     )
     return sqrt_alpha_hat_t * x0 + sqrt_one_minus_alpha_hat_t * noise
+
+
+def _normalize_prediction_type(prediction_type: str) -> str:
+    normalized = prediction_type.lower()
+    if normalized not in {"eps", "v"}:
+        raise ValueError(f"Unsupported prediction_type: {prediction_type}")
+    return normalized
+
+
+def get_diffusion_target(
+    x0: torch.Tensor,
+    noise: torch.Tensor,
+    t: torch.Tensor,
+    schedule: DiffusionSchedule,
+    prediction_type: str,
+) -> torch.Tensor:
+    """Return the training target for the configured prediction objective."""
+
+    normalized = _normalize_prediction_type(prediction_type)
+    if normalized == "eps":
+        return noise
+    return predict_v_from_x0_and_noise(x0, t, noise, schedule)
+
+
+def predict_v_from_x0_and_noise(
+    x0: torch.Tensor,
+    t: torch.Tensor,
+    noise: torch.Tensor,
+    schedule: DiffusionSchedule,
+) -> torch.Tensor:
+    """Compute the v-parameterization target from x0 and epsilon."""
+
+    sqrt_alpha_hat_t = extract_timestep_values(schedule.sqrt_alpha_hat, t, x0)
+    sqrt_one_minus_alpha_hat_t = extract_timestep_values(
+        schedule.sqrt_one_minus_alpha_hat,
+        t,
+        x0,
+    )
+    return sqrt_alpha_hat_t * noise - sqrt_one_minus_alpha_hat_t * x0
+
+
+def predict_noise_from_v(
+    xt: torch.Tensor,
+    t: torch.Tensor,
+    predicted_v: torch.Tensor,
+    schedule: DiffusionSchedule,
+) -> torch.Tensor:
+    """Recover epsilon from x_t and a predicted v target."""
+
+    sqrt_alpha_hat_t = extract_timestep_values(schedule.sqrt_alpha_hat, t, xt)
+    sqrt_one_minus_alpha_hat_t = extract_timestep_values(
+        schedule.sqrt_one_minus_alpha_hat,
+        t,
+        xt,
+    )
+    return sqrt_one_minus_alpha_hat_t * xt + sqrt_alpha_hat_t * predicted_v
+
+
+def predict_x0_from_v(
+    xt: torch.Tensor,
+    t: torch.Tensor,
+    predicted_v: torch.Tensor,
+    schedule: DiffusionSchedule,
+) -> torch.Tensor:
+    """Recover x0 from x_t and a predicted v target."""
+
+    sqrt_alpha_hat_t = extract_timestep_values(schedule.sqrt_alpha_hat, t, xt)
+    sqrt_one_minus_alpha_hat_t = extract_timestep_values(
+        schedule.sqrt_one_minus_alpha_hat,
+        t,
+        xt,
+    )
+    return sqrt_alpha_hat_t * xt - sqrt_one_minus_alpha_hat_t * predicted_v
+
+
+def predict_noise_from_model_output(
+    xt: torch.Tensor,
+    t: torch.Tensor,
+    model_output: torch.Tensor,
+    schedule: DiffusionSchedule,
+    prediction_type: str,
+) -> torch.Tensor:
+    """Interpret the denoiser output as epsilon under eps or v parameterization."""
+
+    normalized = _normalize_prediction_type(prediction_type)
+    if normalized == "eps":
+        return model_output
+    return predict_noise_from_v(xt, t, model_output, schedule)
+
+
+def predict_x0_from_model_output(
+    xt: torch.Tensor,
+    t: torch.Tensor,
+    model_output: torch.Tensor,
+    schedule: DiffusionSchedule,
+    prediction_type: str,
+) -> torch.Tensor:
+    """Interpret the denoiser output as x0 under eps or v parameterization."""
+
+    normalized = _normalize_prediction_type(prediction_type)
+    if normalized == "eps":
+        sqrt_alpha_hat_t = extract_timestep_values(schedule.sqrt_alpha_hat, t, xt)
+        sqrt_one_minus_alpha_hat_t = extract_timestep_values(
+            schedule.sqrt_one_minus_alpha_hat,
+            t,
+            xt,
+        )
+        return (xt - sqrt_one_minus_alpha_hat_t * model_output) / sqrt_alpha_hat_t
+    return predict_x0_from_v(xt, t, model_output, schedule)
 
 
 def predict_x0_from_noise(

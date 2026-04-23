@@ -104,11 +104,11 @@ class DiffusionBlockStack(nn.Module):
 
 
 class DiffusionUNet(nn.Module):
-    """A configurable 3-level DDPM-style UNet for 28x28 grayscale images.
+    """Legacy diffusion U-Net kept for compatibility with older runs.
 
     The network receives a noisy image x_t plus its timestep t and predicts the
-    noise epsilon that was added. Predicting noise is stable because the target
-    is always Gaussian, regardless of which digit or clothing item is present.
+    noise epsilon that was added. It originated as a compact MNIST-style
+    baseline, so the new ADM backend should be preferred for scalable runs.
     """
 
     def __init__(
@@ -209,7 +209,14 @@ class DiffusionUNet(nn.Module):
         self.output_activation = nn.SiLU()
         self.output_projection = nn.Conv2d(level1_channels, in_channels, kernel_size=1)
 
-    def forward(self, x: torch.Tensor, timesteps: torch.Tensor) -> torch.Tensor:
+    def forward(
+        self,
+        x: torch.Tensor,
+        timesteps: torch.Tensor,
+        labels: torch.Tensor | None = None,
+        force_uncond: bool = False,
+    ) -> torch.Tensor:
+        del labels, force_uncond
         time_embedding = self.time_embedding(timesteps)
         time_embedding = self.time_mlp(time_embedding)
 

@@ -1,6 +1,10 @@
 # Image Reconstruction Training
 
-This repository trains `ae`, `dae`, `vae`, and `diffusion` models on MNIST-family datasets. The training entrypoint is now safe for shared Slurm/HPC usage:
+This repository trains `ae`, `dae`, `vae`, and `diffusion` models through a single [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) entrypoint. Phase 1 of the diffusion refactor keeps the legacy autoencoder paths intact while expanding diffusion to MNIST, FashionMNIST, CIFAR10, and ImageNet-ready dataset adapters with a scalable ADM-style U-Net backend.
+
+Phase 2 extends the new ADM diffusion path with classifier-free guidance, configurable attention resolutions, `eps` / `v` prediction targets, DDPM + DDIM sampling, and mixed-precision / gradient-clipping controls for more realistic research-style runs on shared HPC systems.
+
+The training entrypoint remains safe for shared Slurm/HPC usage:
 
 - dataset roots are configurable with `--data_dir`
 - downloads are opt-in with `--download`
@@ -14,8 +18,9 @@ The primary entrypoint is [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstructi
 
 Common options:
 
+- `--config /path/to/recipe.yaml`
 - `--model {ae,dae,vae,diffusion,all}`
-- `--dataset {mnist,fashion,fashion-mnist,fashion_mnist}`
+- `--dataset {mnist,fashion,fashion-mnist,fashion_mnist,cifar10,cifar,cifar-10,cifar_10,imagenet,ilsvrc,ilsvrc2012}`
 - `--epochs`
 - `--batch_size`
 - `--lr`
@@ -30,6 +35,10 @@ Model-specific options:
 
 - `--latent_dim` for `ae`, `dae`, and `vae`
 - `--timesteps`
+- `--diffusion_backbone {adm,legacy}` or `--legacy-diffusion`
+- `--diffusion-preprocessing {default,parity_64}`
+- `--image_size`
+- `--diffusion_channels`
 - `--base_channels`
 - `--time_dim`
 - `--schedule {linear,cosine}`
@@ -37,6 +46,15 @@ Model-specific options:
 - `--beta_end`
 - `--ema_decay`
 - `--num_res_blocks`
+- `--prediction_type {eps,v}`
+- `--attention_resolutions 16 8`
+- `--class_dropout_prob`
+- `--guidance_scale`
+- `--sampler {ddpm,ddim}`
+- `--sampling_steps`
+- `--ddim_eta`
+- `--grad_clip_norm`
+- `--amp_dtype {auto,none,bf16,fp16}`
 - `--sample_count`
 
 Notes:
@@ -44,6 +62,53 @@ Notes:
 - `--timesteps` is the diffusion process length and still supports settings such as `500` and `1000`.
 - `--time_dim` is only the timestep embedding width inside the UNet.
 - `--beta_start` and `--beta_end` shape the linear schedule; the cosine schedule uses the standard improved-DDPM cosine curve.
+- The new diffusion default is `--diffusion_backbone adm`, which resolves to `64x64` and `3` channels unless you override them.
+- `--config` loads a YAML recipe first, then applies any explicit CLI flags on top of it.
+- The old diffusion path is still available through `--legacy-diffusion`; on MNIST/Fashion it resolves to native `28x28` grayscale by default.
+- `--prediction_type eps` preserves the earlier behavior. Use `--prediction_type v` for the stronger phase-2 objective.
+- `--sampler ddpm` preserves the earlier ancestral sampler behavior. `--sampler ddim --sampling_steps 50` is the main new fast-sampling path.
+- `--amp_dtype auto` prefers `bf16` on supported CUDA GPUs and falls back to `fp16` otherwise.
+- `ae`, `dae`, and `vae` remain MNIST/Fashion-only paths for now. CIFAR10 and ImageNet are diffusion-only in this phase.
+
+## Parity Protocol
+
+Phase 4 adds a locked recipe family under [`configs/diffusion/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/). The parity protocol is intended for fair cross-dataset comparison of the same pixel-space ADM diffusion family.
+
+Identical across the parity recipes:
+
+- `image_size = 64`
+- `diffusion_channels = 3`
+- `diffusion_backbone = adm`
+- `diffusion_preprocessing = parity_64`
+- `prediction_type = v`
+- `schedule = cosine`
+- `ema_decay = 0.999`
+- `class_dropout_prob = 0.1`
+- `sampler = ddim`
+- `sampling_steps = 50`
+- `ddim_eta = 0.0`
+- `attention_resolutions = [16, 8]`
+
+Allowed to differ across datasets:
+
+- `batch_size`
+- `num_workers`
+- `epochs`
+- `eval_batch_size`
+- `data_dir`
+- `output_dir`
+- `run_name`
+- the concrete ImageNet subset/full-data realization behind `data_dir`
+
+The parity recipes are:
+
+- [`configs/diffusion/base_adm64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_adm64.yaml)
+- [`configs/diffusion/mnist_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist_64.yaml)
+- [`configs/diffusion/fashion_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion_64.yaml)
+- [`configs/diffusion/cifar10_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10_64.yaml)
+- [`configs/diffusion/imagenet_64.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/imagenet_64.yaml)
+
+The ImageNet recipe is a protocol definition for `64x64` parity runs. It does not claim that the repo has already validated a full ImageNet benchmark result in this phase.
 
 ## Pre-download datasets
 
@@ -75,31 +140,237 @@ python3 train.py \
   --download
 ```
 
+CIFAR-10:
+
+```bash
+python3 train.py \
+  --model diffusion \
+  --dataset cifar10 \
+  --epochs 1 \
+  --batch_size 256 \
+  --data_dir /shared/datasets/image-reconstruction \
+  --output_dir /tmp/image-reconstruction-bootstrap \
+  --download
+```
+
+ImageNet setup is manual in this phase. Prepare:
+
+```text
+{data_dir}/imagenet/train/<class_name>/*.JPEG
+{data_dir}/imagenet/val/<class_name>/*.JPEG
+```
+
+`--download` is intentionally unsupported for ImageNet, and the trainer will fail with a clear path hint if those directories are missing.
+
 If the dataset is missing and `--download` is not set, training fails with a clear message telling you to pre-download on a login node or re-run with `--download`.
 
 ## Local experiment
 
-Quick local diffusion test:
+Quick local ADM diffusion tests:
 
 ```bash
 python3 train.py \
   --model diffusion \
   --dataset mnist \
   --epochs 5 \
-  --batch_size 128 \
-  --timesteps 200 \
-  --base_channels 16 \
+  --batch_size 64 \
+  --timesteps 1000 \
+  --base_channels 64 \
+  --time_dim 128 \
   --schedule cosine \
   --ema_decay 0.999 \
   --num_res_blocks 2 \
+  --prediction_type v \
+  --attention-resolutions 16 8 \
+  --class_dropout_prob 0.1 \
+  --guidance_scale 3.0 \
+  --sampler ddim \
+  --sampling_steps 50 \
+  --grad_clip_norm 1.0 \
+  --amp_dtype auto \
   --sample_count 8
 ```
 
-The old simple style still works:
+FashionMNIST:
 
 ```bash
-python3 train.py --model diffusion --epochs 5
+python3 train.py \
+  --model diffusion \
+  --dataset fashion \
+  --epochs 5 \
+  --batch_size 64 \
+  --timesteps 1000 \
+  --image_size 64 \
+  --diffusion_channels 3 \
+  --base_channels 64 \
+  --time_dim 128 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
+  --prediction_type v \
+  --attention-resolutions 16 8 \
+  --class_dropout_prob 0.1 \
+  --guidance_scale 3.0 \
+  --sampler ddim \
+  --sampling_steps 50 \
+  --grad_clip_norm 1.0 \
+  --amp_dtype auto \
+  --sample_count 8
 ```
+
+CIFAR-10:
+
+```bash
+python3 train.py \
+  --model diffusion \
+  --dataset cifar10 \
+  --epochs 5 \
+  --batch_size 64 \
+  --timesteps 1000 \
+  --image_size 64 \
+  --diffusion_channels 3 \
+  --base_channels 64 \
+  --time_dim 128 \
+  --schedule cosine \
+  --ema_decay 0.999 \
+  --num_res_blocks 2 \
+  --prediction_type v \
+  --attention-resolutions 16 8 \
+  --class_dropout_prob 0.1 \
+  --guidance_scale 3.0 \
+  --sampler ddim \
+  --sampling_steps 50 \
+  --grad_clip_norm 1.0 \
+  --amp_dtype auto \
+  --sample_count 8
+```
+
+The old simple style still works, now on the ADM default:
+
+```bash
+python3 train.py --model diffusion --dataset mnist --epochs 5
+```
+
+Legacy compatibility run:
+
+```bash
+python3 train.py \
+  --model diffusion \
+  --dataset mnist \
+  --legacy-diffusion \
+  --image_size 28 \
+  --diffusion_channels 1 \
+  --epochs 5
+```
+
+Standardized parity runs:
+
+MNIST:
+
+```bash
+python3 train.py --config configs/diffusion/mnist_64.yaml \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+```
+
+FashionMNIST:
+
+```bash
+python3 train.py --config configs/diffusion/fashion_64.yaml \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+```
+
+CIFAR10:
+
+```bash
+python3 train.py --config configs/diffusion/cifar10_64.yaml \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+```
+
+ImageNet parity protocol:
+
+```bash
+python3 train.py --config configs/diffusion/imagenet_64.yaml \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --output-dir /scratch/$USER/image-reconstruction-runs/parity
+```
+
+## Checkpoint Evaluation
+
+Phase 3 adds a separate [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py) entrypoint for checkpoint-only evaluation and sampling. The training path in [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py) is unchanged.
+
+Primary generative metrics:
+
+- `FID` as the primary reported score
+- `Inception Score` as a secondary generative score
+- `LPIPS diversity` as a perceptual diversity signal across generated-image pairs
+
+Auxiliary paired metrics:
+
+- `PSNR`
+- `SSIM`
+
+Those paired metrics are still useful for denoising-style sanity checks, but they are not reported as the primary generative comparison.
+
+Evaluation command pattern:
+
+```bash
+python3 evaluate.py \
+  --checkpoint /path/to/checkpoints/best.pt \
+  --mode evaluate \
+  --num-generated-samples 1000 \
+  --eval-batch-size 64 \
+  --sampler ddim \
+  --sampling-steps 50 \
+  --ddim-eta 0.0 \
+  --guidance-scale 3.0 \
+  --artifact-sample-count 16 \
+  --cfg-comparison-scales 0 1 3 5 \
+  --amp-dtype auto
+```
+
+Sampling-only command pattern:
+
+```bash
+python3 evaluate.py \
+  --checkpoint /path/to/checkpoints/best.pt \
+  --mode sample \
+  --sampler ddim \
+  --sampling-steps 50 \
+  --guidance-scale 3.0 \
+  --artifact-sample-count 16 \
+  --save-raw-images
+```
+
+Notes:
+
+- `evaluate.py` defaults to saving results under `<training_run>/evaluations/`.
+- Real-image FID reference stats are cached under `<output_dir>/_reference_stats/` unless you override `--reference-stats-dir`.
+- The same dataset/image-size/channel preprocessing signature is used for both cached real stats and generated images.
+- When a checkpoint was trained from a parity recipe, `evaluate.py` can reuse the checkpoint’s saved evaluation defaults such as `eval_batch_size`, `num_generated_samples`, and CFG comparison scales.
+- If the required torchvision model weights are not already cached locally, rerun on a login node with `--allow-model-download` once, then use the cached weights on compute nodes.
+
+## Aggregation
+
+Phase 4 adds [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py) to combine completed evaluation payloads into one comparison table.
+
+Example:
+
+```bash
+python3 aggregate_results.py \
+  /scratch/$USER/image-reconstruction-runs/parity \
+  --output-dir /scratch/$USER/image-reconstruction-runs/parity_reports/final_table
+```
+
+This writes:
+
+- `aggregated_results.json`
+- `aggregated_results.yaml`
+- `aggregated_results.csv`
+- `aggregated_results.md`
+- `comparison_table.md`
 
 ## Slurm experiment
 
