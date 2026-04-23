@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     common_run.add_argument("--seeds", nargs="*", type=int, default=None, help="Seeds to run. Defaults to 1 2 3.")
     common_run.add_argument("--config-dir", type=Path, default=Path("configs/diffusion"))
     common_run.add_argument("--smoke", action="store_true", help="Use the lightweight smoke-test recipes and default to seed 1 when --seeds is omitted.")
+    common_run.add_argument(
+        "--allow-model-download",
+        action="store_true",
+        help="Pass through to evaluate.py so missing pretrained metric-model weights can be downloaded during evaluation.",
+    )
 
     run_parser = subparsers.add_parser("run", parents=[common_run], help="Launch train/eval phases for the parity study.")
     run_parser.add_argument("--phase", choices=("train", "eval", "both"), default="both")
@@ -91,6 +96,7 @@ def main() -> None:
             seeds=seeds,
             config_dir=args.config_dir,
             smoke=args.smoke,
+            allow_model_download=args.allow_model_download,
         )
 
         if args.command == "plan":

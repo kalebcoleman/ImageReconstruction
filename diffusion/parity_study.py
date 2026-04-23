@@ -115,6 +115,7 @@ def build_study_plans(
     seeds: tuple[int, ...] = DEFAULT_STUDY_SEEDS,
     config_dir: Path = DEFAULT_STUDY_CONFIG_DIR,
     smoke: bool = False,
+    allow_model_download: bool = False,
     repo_root: Path | None = None,
 ) -> list[StudyRunPlan]:
     """Create deterministic train/eval plans for the final study."""
@@ -168,6 +169,8 @@ def build_study_plans(
                 "--data-dir",
                 str(resolved_data_dir),
             ]
+            if allow_model_download:
+                eval_command.append("--allow-model-download")
             if smoke:
                 eval_command.extend(SMOKE_EVAL_COMMAND_OVERRIDES)
             plans.append(

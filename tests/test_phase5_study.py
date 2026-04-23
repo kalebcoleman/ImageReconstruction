@@ -134,6 +134,19 @@ def test_build_smoke_study_plans_resolve_lightweight_recipes_and_eval_overrides(
     assert _parse_option(plan.eval_command, "--lpips-pair-count") == "16"
 
 
+def test_build_study_plans_can_pass_allow_model_download_to_eval(tmp_path: Path) -> None:
+    plans = build_study_plans(
+        study_dir=tmp_path / "study",
+        data_dir=tmp_path / "data",
+        datasets=("mnist",),
+        seeds=(1,),
+        allow_model_download=True,
+    )
+
+    assert len(plans) == 1
+    assert "--allow-model-download" in plans[0].eval_command
+
+
 def test_write_study_plan_files_outputs_shell_and_slurm(tmp_path: Path) -> None:
     plans = build_study_plans(
         study_dir=tmp_path / "study",

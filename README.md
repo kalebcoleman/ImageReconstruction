@@ -138,6 +138,7 @@ Smoke-test behavior with `--smoke`:
 - uses distinct run names such as `parity_mnist_64_smoke_seed001`
 - keeps the same `runs/`, `summaries/`, registry, selection, and deliverables layout
 - refuses to mix smoke and full-study runs in the same `--study-dir`
+- if pretrained evaluation weights are not cached yet, rerun the eval-inclusive command with `--allow-model-download` once
 
 Plan shell and Slurm-friendly commands without running:
 
@@ -197,6 +198,16 @@ python3 run_parity_suite.py run \
   --study-dir /scratch/$USER/image-reconstruction-final-study \
   --data-dir /scratch/$USER/image-reconstruction/data \
   --phase both
+```
+
+If the first evaluation on a machine needs to cache Inception/LPIPS weights, add `--allow-model-download` to the `run` or `plan` command once:
+
+```bash
+python3 run_parity_suite.py run \
+  --study-dir /scratch/$USER/image-reconstruction-final-study \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --phase both \
+  --allow-model-download
 ```
 
 Run train-only:
