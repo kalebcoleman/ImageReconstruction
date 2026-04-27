@@ -11,10 +11,10 @@ ImageNet is not part of the default final study.
 
 ## Main Entry Points
 
-- [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py): train one run from CLI flags or a config
-- [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py): checkpoint-only evaluation and sampling
-- [`run_parity_suite.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/run_parity_suite.py): final-study orchestration
-- [`aggregate_results.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/aggregate_results.py): manual aggregation helper
+- [`train.py`](train.py): train one run from CLI flags or a config
+- [`evaluate.py`](evaluate.py): checkpoint-only evaluation and sampling
+- [`run_parity_suite.py`](run_parity_suite.py): final-study orchestration
+- [`aggregate_results.py`](aggregate_results.py): manual aggregation helper
 
 ## Final Study Design
 
@@ -30,32 +30,33 @@ ImageNet is not part of the default final study.
 
 Study configs:
 
-- [`configs/diffusion/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist.yaml)
-- [`configs/diffusion/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion.yaml)
-- [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
-- [`configs/diffusion/base_legacy28_gray.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_legacy28_gray.yaml)
-- [`configs/diffusion/base_adm32.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/base_adm32.yaml)
+- [`configs/diffusion/mnist.yaml`](configs/diffusion/mnist.yaml)
+- [`configs/diffusion/fashion.yaml`](configs/diffusion/fashion.yaml)
+- [`configs/diffusion/cifar10.yaml`](configs/diffusion/cifar10.yaml)
+- [`configs/diffusion/cifar10_showcase64.yaml`](configs/diffusion/cifar10_showcase64.yaml) — optional presentation recipe, not part of the default final study
+- [`configs/diffusion/base_legacy28_gray.yaml`](configs/diffusion/base_legacy28_gray.yaml)
+- [`configs/diffusion/base_adm32.yaml`](configs/diffusion/base_adm32.yaml)
 
 Default full-study epochs:
 
-- MNIST: `50` epochs in [`configs/diffusion/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/mnist.yaml)
-- FashionMNIST: `75` epochs in [`configs/diffusion/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/fashion.yaml)
-- CIFAR10: `150` epochs in [`configs/diffusion/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/cifar10.yaml)
+- MNIST: `50` epochs in [`configs/diffusion/mnist.yaml`](configs/diffusion/mnist.yaml)
+- FashionMNIST: `75` epochs in [`configs/diffusion/fashion.yaml`](configs/diffusion/fashion.yaml)
+- CIFAR10: `150` epochs in [`configs/diffusion/cifar10.yaml`](configs/diffusion/cifar10.yaml)
 
 Smoke configs:
 
-- [`configs/diffusion/smoke/mnist.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/mnist.yaml)
-- [`configs/diffusion/smoke/fashion.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/fashion.yaml)
-- [`configs/diffusion/smoke/cifar10.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/cifar10.yaml)
-- [`configs/diffusion/smoke/base_legacy28_gray_smoke.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/base_legacy28_gray_smoke.yaml)
-- [`configs/diffusion/smoke/base_adm32_smoke.yaml`](/Users/itzjuztmya/Kaleb/ImageReconstruction/configs/diffusion/smoke/base_adm32_smoke.yaml)
+- [`configs/diffusion/smoke/mnist.yaml`](configs/diffusion/smoke/mnist.yaml)
+- [`configs/diffusion/smoke/fashion.yaml`](configs/diffusion/smoke/fashion.yaml)
+- [`configs/diffusion/smoke/cifar10.yaml`](configs/diffusion/smoke/cifar10.yaml)
+- [`configs/diffusion/smoke/base_legacy28_gray_smoke.yaml`](configs/diffusion/smoke/base_legacy28_gray_smoke.yaml)
+- [`configs/diffusion/smoke/base_adm32_smoke.yaml`](configs/diffusion/smoke/base_adm32_smoke.yaml)
 
 ## Monsoon Commands
 
 The recommended Monsoon path is the Slurm final-study array set in
-[`slurm/final_study/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study).
+[`slurm/final_study/`](slurm/final_study).
 Dataset-specific training arrays are preferred because Slurm arrays share one
-time limit: MNIST and FashionMNIST use 8-hour jobs, while CIFAR10 uses 24-hour
+time limit: MNIST uses 8-hour jobs, FashionMNIST uses 16-hour jobs, and CIFAR10 uses 24-hour
 jobs.
 
 ```bash
@@ -91,7 +92,8 @@ sbatch slurm/final_study/finalize.slurm
 Resource defaults:
 
 - smoke: A100, 2h, 4 CPUs, 32G
-- MNIST/Fashion training: A100, 8h, 4 CPUs, 32G
+- MNIST training: A100, 8h, 4 CPUs, 32G
+- FashionMNIST training: A100, 16h, 4 CPUs, 32G
 - CIFAR10 training: A100, 24h, 4 CPUs, 32G
 - evaluation: A100, 12h, 4 CPUs, 32G
 
@@ -126,6 +128,47 @@ copies plus nearest-neighbor upscaled `*_presentation.png` copies by default.
 Use `--no-presentation-copies` to skip them or `--presentation-scale 6` to
 change the integer upscale factor.
 
+Current copied deliverables are indexed in [`deliverables/README.md`](deliverables/README.md).
+The GitHub Pages portfolio page lives at [`docs/index.html`](docs/index.html).
+In GitHub, enable Pages with source set to the `docs/` folder on the main branch.
+
+## CIFAR10 Presentation Quality
+
+CIFAR10 final-study samples are generated at native `32x32`. That is correct
+for the study, but any slide viewer that smooths the pixels will make zoomed
+images look blurry. Use nearest-neighbor upscaled copies for slides when you
+want crisp pixels:
+
+```text
+deliverables/presentation_crisp/*_4x_nearest.png
+```
+
+For a research-paper-style view, use compact native contact sheets instead of
+enlarged tiles:
+
+```text
+deliverables/presentation_compact/*_native_2x.png
+```
+
+New diffusion runs save this style automatically as
+`generated_samples_native_grid.png` next to the normal generated sample grid.
+
+Generating at `64x64` can make presentation images easier to view, but only if
+the model is trained and sampled at `64x64`; resizing an existing `32x32` PNG
+does not create real detail. The optional showcase recipe is:
+
+```bash
+python train.py \
+  --config configs/diffusion/cifar10_showcase64.yaml \
+  --data-dir /scratch/$USER/image-reconstruction/data \
+  --output-dir /scratch/$USER/image-reconstruction-showcase \
+  --run-name cifar10_showcase64_seed001 \
+  --seed 1
+```
+
+Treat that as a presentation/showcase run, not a replacement for the native
+`32x32` final-study result.
+
 ## Notes
 
 - If a dataset is missing locally, add `--download` on a login node so
@@ -137,13 +180,13 @@ change the integer upscale factor.
 
 ## Manual Use
 
-Manual training still works through [`train.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/train.py).
+Manual training still works through [`train.py`](train.py).
 The repo still keeps:
 
 - AE/DAE/VAE functionality for MNIST/Fashion-style runs
 - legacy diffusion support
 - ADM diffusion support
-- checkpoint-only evaluation via [`evaluate.py`](/Users/itzjuztmya/Kaleb/ImageReconstruction/evaluate.py)
+- checkpoint-only evaluation via [`evaluate.py`](evaluate.py)
 
 Example manual config runs:
 

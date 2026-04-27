@@ -1,0 +1,2 @@
+dataset,model,mean_loss,std_loss,psnr,ssim,parameters,seed
+cifar10,diffusion,0.10588777895755828,0.0,18.996833178541962,0.6322167067770745,6347971,3

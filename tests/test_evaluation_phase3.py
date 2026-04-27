@@ -14,7 +14,7 @@ from diffusion.eval_pipeline import (
     _save_nearest_neighbor_grid,
     run_checkpoint_evaluation,
 )
-from train import ExperimentConfig, instantiate_model, json_ready, render_image
+from train import ExperimentConfig, instantiate_model, json_ready, render_image, save_native_image_grid
 
 
 class DummyInception:
@@ -166,6 +166,19 @@ def test_render_image_defaults_to_nearest_interpolation_for_low_resolution_artif
 
     assert high_res_axis.imshow_kwargs is not None
     assert "interpolation" not in high_res_axis.imshow_kwargs
+
+
+def test_save_native_image_grid_preserves_source_pixel_scale(tmp_path: Path) -> None:
+    images = torch.rand(4, 3, 32, 32)
+    grid_path = tmp_path / "native_grid.png"
+
+    save_native_image_grid(images, grid_path, num_cols=2, padding=1)
+
+    assert grid_path.exists()
+    from PIL import Image
+
+    with Image.open(grid_path) as image:
+        assert image.size == (65, 65)
 
 
 def test_load_torchvision_model_disables_aux_logits_after_weighted_load() -> None:
@@ -340,6 +353,8 @@ def test_checkpoint_only_evaluation_path_supports_legacy_and_adm(
     assert "generated_sample_grid" in payload["artifacts"]
     assert "generated_samples" in payload["artifacts"]
     assert Path(payload["artifacts"]["generated_samples"]).exists()
+    assert "generated_samples_native_grid" in payload["artifacts"]
+    assert Path(payload["artifacts"]["generated_samples_native_grid"]).exists()
     assert "diffusion_snapshots" in payload["artifacts"]
     assert Path(payload["artifacts"]["diffusion_snapshots"]).exists()
     assert "reconstructions" in payload["artifacts"]

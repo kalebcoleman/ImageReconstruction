@@ -15,7 +15,7 @@ ImageNet is intentionally not in the default final study.
 Slurm arrays share one wall-time limit across all tasks. MNIST and FashionMNIST are expected to fit in shorter allocations than CIFAR10, so final training is split into dataset-specific arrays:
 
 - `train_mnist_array.slurm`: A100, 8h, 4 CPUs, 32G
-- `train_fashion_array.slurm`: A100, 8h, 4 CPUs, 32G
+- `train_fashion_array.slurm`: A100, 16h, 4 CPUs, 32G
 - `train_cifar10_array.slurm`: A100, 24h, 4 CPUs, 32G
 
 This keeps CIFAR10 from forcing MNIST and FashionMNIST to reserve 24 hours.
@@ -23,7 +23,8 @@ This keeps CIFAR10 from forcing MNIST and FashionMNIST to reserve 24 hours.
 ## Resource Defaults
 
 - Smoke: A100, 2h, 4 CPUs, 32G
-- MNIST/Fashion training: A100, 8h, 4 CPUs, 32G
+- MNIST training: A100, 8h, 4 CPUs, 32G
+- FashionMNIST training: A100, 16h, 4 CPUs, 32G
 - CIFAR10 training: A100, 24h, 4 CPUs, 32G
 - Evaluation: A100, 12h, 4 CPUs, 32G
 

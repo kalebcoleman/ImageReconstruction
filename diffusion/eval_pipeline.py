@@ -40,6 +40,7 @@ from train import (
     plot_image_grid,
     prepare_display_images,
     render_image,
+    save_native_image_grid,
 )
 
 
@@ -620,6 +621,10 @@ def run_checkpoint_evaluation(
     )
     artifact_paths["generated_sample_grid"] = str(sample_grid_path.resolve())
     artifact_paths["generated_samples"] = str(sample_grid_path.resolve())
+    native_sample_grid_path = paths["artifacts"] / "generated_samples_native_grid.png"
+    save_native_image_grid(artifact_images, native_sample_grid_path)
+    artifact_paths["generated_native_grid"] = str(native_sample_grid_path.resolve())
+    artifact_paths["generated_samples_native_grid"] = str(native_sample_grid_path.resolve())
 
     if config.dataset_num_classes is not None and not evaluation_config.force_unconditional:
         class_grid_labels = _balanced_labels(

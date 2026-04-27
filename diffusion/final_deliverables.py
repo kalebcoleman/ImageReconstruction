@@ -16,6 +16,7 @@ DEFAULT_PRESENTATION_SCALE = 4
 
 ARTIFACT_EXPORT_NAMES: dict[str, str] = {
     "generated_sample_grid": "generated_samples",
+    "generated_samples_native_grid": "generated_samples_native_grid",
     "cfg_comparison_grid": "cfg_comparison",
     "diffusion_snapshots": "diffusion_snapshots",
     "reconstructions": "reconstructions",
@@ -68,6 +69,8 @@ def build_best_run_rows(selection_payload: dict[str, dict[str, dict[str, Any]]])
                 "metrics_path": best.get("metrics_path"),
                 "generated_sample_grid": best.get("generated_sample_grid"),
                 "generated_samples": best.get("generated_samples") or best.get("generated_sample_grid"),
+                "generated_samples_native_grid": best.get("generated_samples_native_grid") or best.get("generated_native_grid"),
+                "generated_native_grid": best.get("generated_samples_native_grid") or best.get("generated_native_grid"),
                 "cfg_comparison_grid": best.get("cfg_comparison_grid"),
                 "diffusion_snapshots": best.get("diffusion_snapshots") or best.get("reverse_process_snapshots"),
                 "reverse_process_snapshots": best.get("diffusion_snapshots") or best.get("reverse_process_snapshots"),

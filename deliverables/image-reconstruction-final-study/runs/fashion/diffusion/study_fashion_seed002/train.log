@@ -1,0 +1,239 @@
+2026-04-24 03:13:12,901 | INFO | Start time: 2026-04-24T03:13:12.901567
+2026-04-24 03:13:12,902 | INFO | Hostname: cn1
+2026-04-24 03:13:12,902 | INFO | Device: cuda (Tesla V100-SXM2-16GB)
+2026-04-24 03:13:12,902 | INFO | Seed: 2
+2026-04-24 03:13:12,902 | INFO | CLI args: --config /home/kac965/projects/ImageReconstruction/configs/diffusion/fashion.yaml --seed 2 --run-name study_fashion_seed002 --data-dir /scratch/kac965/image-reconstruction/data --output-dir /scratch/kac965/image-reconstruction-final-study/runs
+2026-04-24 03:13:12,902 | INFO | Resolved output directory: /scratch/kac965/image-reconstruction-final-study/runs/fashion/diffusion/study_fashion_seed002
+2026-04-24 03:13:12,903 | INFO | Data directory: /scratch/kac965/image-reconstruction/data
+2026-04-24 03:13:12,903 | INFO | Download enabled: False
+2026-04-24 03:13:12,903 | INFO | Run config: dataset=fashion model=diffusion epochs=75 batch_size=128 lr=0.001 num_workers=4
+2026-04-24 03:13:13,019 | INFO | Model hyperparameters: backbone=legacy image_size=28 channels=1 classes=10 base_channels=64 time_dim=64 num_res_blocks=2 timesteps=500 schedule=linear prediction_type=eps sampler=ddim sampling_steps=50 ddim_eta=0 attention_resolutions=() beta_start=0.0001 beta_end=0.02 ema_decay=0 class_dropout_prob=0 guidance_scale=1 grad_clip_norm=1.0 amp=bf16 sample_count=16
+2026-04-24 03:13:13,020 | INFO | Saved resolved config to /scratch/kac965/image-reconstruction-final-study/runs/fashion/diffusion/study_fashion_seed002/config.json
+2026-04-24 03:13:13,131 | INFO | Dataset sizes: train=60000 test=10000
+2026-04-24 03:13:13,131 | INFO | Batch counts: train=469 test=79
+2026-04-24 03:13:13,279 | INFO | Trainable parameters: 7891073
+2026-04-24 03:17:21,447 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.118306
+2026-04-24 03:20:57,648 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.095117
+2026-04-24 03:21:41,646 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.067004
+2026-04-24 03:21:41,648 | INFO | Fold 1 | Epoch 1/75 | Train Loss=0.095117 | Test Loss=0.067004
+2026-04-24 03:25:48,620 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.062420
+2026-04-24 03:29:24,675 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.061771
+2026-04-24 03:30:08,585 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.061646
+2026-04-24 03:30:08,586 | INFO | Fold 1 | Epoch 2/75 | Train Loss=0.061771 | Test Loss=0.061646
+2026-04-24 03:34:15,566 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.059650
+2026-04-24 03:37:51,600 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.058531
+2026-04-24 03:38:35,463 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.057154
+2026-04-24 03:38:35,464 | INFO | Fold 1 | Epoch 3/75 | Train Loss=0.058531 | Test Loss=0.057154
+2026-04-24 03:42:42,458 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.056666
+2026-04-24 03:46:18,533 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.055874
+2026-04-24 03:47:02,410 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.054992
+2026-04-24 03:47:02,412 | INFO | Fold 1 | Epoch 4/75 | Train Loss=0.055874 | Test Loss=0.054992
+2026-04-24 03:51:09,379 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.054544
+2026-04-24 03:54:45,419 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.054110
+2026-04-24 03:55:29,314 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.053690
+2026-04-24 03:55:29,315 | INFO | Fold 1 | Epoch 5/75 | Train Loss=0.054110 | Test Loss=0.053690
+2026-04-24 03:59:36,315 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.054061
+2026-04-24 04:03:12,351 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.053863
+2026-04-24 04:03:56,281 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.054494
+2026-04-24 04:03:56,283 | INFO | Fold 1 | Epoch 6/75 | Train Loss=0.053863 | Test Loss=0.054494
+2026-04-24 04:08:03,264 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.053281
+2026-04-24 04:11:39,313 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.053349
+2026-04-24 04:12:23,213 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.053141
+2026-04-24 04:12:23,215 | INFO | Fold 1 | Epoch 7/75 | Train Loss=0.053349 | Test Loss=0.053141
+2026-04-24 04:16:30,185 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.052314
+2026-04-24 04:20:06,238 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.052659
+2026-04-24 04:20:50,139 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052752
+2026-04-24 04:20:50,140 | INFO | Fold 1 | Epoch 8/75 | Train Loss=0.052659 | Test Loss=0.052752
+2026-04-24 04:24:57,113 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.052612
+2026-04-24 04:28:33,169 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.051960
+2026-04-24 04:29:17,074 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052233
+2026-04-24 04:29:17,076 | INFO | Fold 1 | Epoch 9/75 | Train Loss=0.051960 | Test Loss=0.052233
+2026-04-24 04:33:24,068 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.052634
+2026-04-24 04:37:00,104 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.052403
+2026-04-24 04:37:43,969 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052726
+2026-04-24 04:37:43,971 | INFO | Fold 1 | Epoch 10/75 | Train Loss=0.052403 | Test Loss=0.052726
+2026-04-24 04:41:50,922 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.052340
+2026-04-24 04:45:26,957 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.052257
+2026-04-24 04:46:10,849 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.053663
+2026-04-24 04:46:10,851 | INFO | Fold 1 | Epoch 11/75 | Train Loss=0.052257 | Test Loss=0.053663
+2026-04-24 04:50:17,788 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.051231
+2026-04-24 04:53:53,815 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.051434
+2026-04-24 04:54:37,673 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052081
+2026-04-24 04:54:37,675 | INFO | Fold 1 | Epoch 12/75 | Train Loss=0.051434 | Test Loss=0.052081
+2026-04-24 04:58:44,622 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.051364
+2026-04-24 05:02:20,653 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.051115
+2026-04-24 05:03:04,511 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052775
+2026-04-24 05:03:04,513 | INFO | Fold 1 | Epoch 13/75 | Train Loss=0.051115 | Test Loss=0.052775
+2026-04-24 05:07:11,433 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.051915
+2026-04-24 05:10:47,451 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.051796
+2026-04-24 05:11:31,334 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052100
+2026-04-24 05:11:31,354 | INFO | Fold 1 | Epoch 14/75 | Train Loss=0.051796 | Test Loss=0.052100
+2026-04-24 05:15:38,278 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.051050
+2026-04-24 05:19:14,292 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050886
+2026-04-24 05:19:58,175 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050781
+2026-04-24 05:19:58,176 | INFO | Fold 1 | Epoch 15/75 | Train Loss=0.050886 | Test Loss=0.050781
+2026-04-24 05:24:05,124 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050789
+2026-04-24 05:27:41,151 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050832
+2026-04-24 05:28:25,047 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052307
+2026-04-24 05:28:25,048 | INFO | Fold 1 | Epoch 16/75 | Train Loss=0.050832 | Test Loss=0.052307
+2026-04-24 05:32:31,978 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050790
+2026-04-24 05:36:07,993 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050768
+2026-04-24 05:36:51,859 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051320
+2026-04-24 05:36:51,860 | INFO | Fold 1 | Epoch 17/75 | Train Loss=0.050768 | Test Loss=0.051320
+2026-04-24 05:40:58,799 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050069
+2026-04-24 05:44:34,828 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050203
+2026-04-24 05:45:18,694 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051636
+2026-04-24 05:45:18,696 | INFO | Fold 1 | Epoch 18/75 | Train Loss=0.050203 | Test Loss=0.051636
+2026-04-24 05:49:25,651 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050619
+2026-04-24 05:53:01,698 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050502
+2026-04-24 05:53:45,598 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051478
+2026-04-24 05:53:45,600 | INFO | Fold 1 | Epoch 19/75 | Train Loss=0.050502 | Test Loss=0.051478
+2026-04-24 05:57:52,562 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050741
+2026-04-24 06:01:28,597 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050652
+2026-04-24 06:02:12,465 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050282
+2026-04-24 06:02:12,467 | INFO | Fold 1 | Epoch 20/75 | Train Loss=0.050652 | Test Loss=0.050282
+2026-04-24 06:06:19,629 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050332
+2026-04-24 06:09:55,793 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050384
+2026-04-24 06:10:39,692 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051393
+2026-04-24 06:10:39,693 | INFO | Fold 1 | Epoch 21/75 | Train Loss=0.050384 | Test Loss=0.051393
+2026-04-24 06:14:46,646 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049855
+2026-04-24 06:18:22,673 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049632
+2026-04-24 06:19:06,526 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051509
+2026-04-24 06:19:06,527 | INFO | Fold 1 | Epoch 22/75 | Train Loss=0.049632 | Test Loss=0.051509
+2026-04-24 06:23:13,516 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049943
+2026-04-24 06:26:49,545 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.050040
+2026-04-24 06:27:33,405 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050692
+2026-04-24 06:27:33,406 | INFO | Fold 1 | Epoch 23/75 | Train Loss=0.050040 | Test Loss=0.050692
+2026-04-24 06:31:40,358 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049419
+2026-04-24 06:35:16,390 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049756
+2026-04-24 06:36:00,266 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051584
+2026-04-24 06:36:00,267 | INFO | Fold 1 | Epoch 24/75 | Train Loss=0.049756 | Test Loss=0.051584
+2026-04-24 06:40:07,219 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049219
+2026-04-24 06:43:43,258 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049786
+2026-04-24 06:44:27,155 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049656
+2026-04-24 06:44:27,157 | INFO | Fold 1 | Epoch 25/75 | Train Loss=0.049786 | Test Loss=0.049656
+2026-04-24 06:48:34,103 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049896
+2026-04-24 06:52:10,133 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049651
+2026-04-24 06:52:54,016 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.052415
+2026-04-24 06:52:54,017 | INFO | Fold 1 | Epoch 26/75 | Train Loss=0.049651 | Test Loss=0.052415
+2026-04-24 06:57:01,212 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.050254
+2026-04-24 07:00:37,429 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049644
+2026-04-24 07:01:21,315 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050397
+2026-04-24 07:01:21,317 | INFO | Fold 1 | Epoch 27/75 | Train Loss=0.049644 | Test Loss=0.050397
+2026-04-24 07:05:28,319 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049469
+2026-04-24 07:09:04,351 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049523
+2026-04-24 07:09:48,212 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.051326
+2026-04-24 07:09:48,213 | INFO | Fold 1 | Epoch 28/75 | Train Loss=0.049523 | Test Loss=0.051326
+2026-04-24 07:13:55,146 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049106
+2026-04-24 07:17:31,179 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049263
+2026-04-24 07:18:15,057 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048782
+2026-04-24 07:18:15,059 | INFO | Fold 1 | Epoch 29/75 | Train Loss=0.049263 | Test Loss=0.048782
+2026-04-24 07:22:22,087 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048451
+2026-04-24 07:25:58,123 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049138
+2026-04-24 07:26:42,011 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050508
+2026-04-24 07:26:42,013 | INFO | Fold 1 | Epoch 30/75 | Train Loss=0.049138 | Test Loss=0.050508
+2026-04-24 07:30:48,958 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049310
+2026-04-24 07:34:24,987 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049175
+2026-04-24 07:35:08,874 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049786
+2026-04-24 07:35:08,876 | INFO | Fold 1 | Epoch 31/75 | Train Loss=0.049175 | Test Loss=0.049786
+2026-04-24 07:39:16,034 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048511
+2026-04-24 07:42:52,072 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048752
+2026-04-24 07:43:35,942 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049600
+2026-04-24 07:43:35,943 | INFO | Fold 1 | Epoch 32/75 | Train Loss=0.048752 | Test Loss=0.049600
+2026-04-24 07:47:42,884 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048450
+2026-04-24 07:51:18,979 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048874
+2026-04-24 07:52:02,873 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050294
+2026-04-24 07:52:02,875 | INFO | Fold 1 | Epoch 33/75 | Train Loss=0.048874 | Test Loss=0.050294
+2026-04-24 07:56:09,815 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049199
+2026-04-24 07:59:45,829 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049230
+2026-04-24 08:00:29,702 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049344
+2026-04-24 08:00:29,703 | INFO | Fold 1 | Epoch 34/75 | Train Loss=0.049230 | Test Loss=0.049344
+2026-04-24 08:04:36,727 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048865
+2026-04-24 08:08:12,758 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048909
+2026-04-24 08:08:56,650 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049087
+2026-04-24 08:08:56,651 | INFO | Fold 1 | Epoch 35/75 | Train Loss=0.048909 | Test Loss=0.049087
+2026-04-24 08:13:03,585 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047920
+2026-04-24 08:16:39,613 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048493
+2026-04-24 08:17:23,498 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048991
+2026-04-24 08:17:23,500 | INFO | Fold 1 | Epoch 36/75 | Train Loss=0.048493 | Test Loss=0.048991
+2026-04-24 08:21:30,458 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048802
+2026-04-24 08:25:06,486 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.049104
+2026-04-24 08:25:50,369 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049688
+2026-04-24 08:25:50,370 | INFO | Fold 1 | Epoch 37/75 | Train Loss=0.049104 | Test Loss=0.049688
+2026-04-24 08:29:57,328 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048555
+2026-04-24 08:33:33,335 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048290
+2026-04-24 08:34:17,218 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050117
+2026-04-24 08:34:17,220 | INFO | Fold 1 | Epoch 38/75 | Train Loss=0.048290 | Test Loss=0.050117
+2026-04-24 08:38:24,148 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047904
+2026-04-24 08:42:00,174 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048261
+2026-04-24 08:42:44,031 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048335
+2026-04-24 08:42:44,032 | INFO | Fold 1 | Epoch 39/75 | Train Loss=0.048261 | Test Loss=0.048335
+2026-04-24 08:46:51,063 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048332
+2026-04-24 08:50:27,097 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048292
+2026-04-24 08:51:10,960 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048667
+2026-04-24 08:51:10,961 | INFO | Fold 1 | Epoch 40/75 | Train Loss=0.048292 | Test Loss=0.048667
+2026-04-24 08:55:17,898 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.049001
+2026-04-24 08:58:53,923 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048865
+2026-04-24 08:59:37,807 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049911
+2026-04-24 08:59:37,808 | INFO | Fold 1 | Epoch 41/75 | Train Loss=0.048865 | Test Loss=0.049911
+2026-04-24 09:03:44,763 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048753
+2026-04-24 09:07:20,784 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048676
+2026-04-24 09:08:04,671 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048697
+2026-04-24 09:08:04,672 | INFO | Fold 1 | Epoch 42/75 | Train Loss=0.048676 | Test Loss=0.048697
+2026-04-24 09:12:11,614 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048334
+2026-04-24 09:15:47,638 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048204
+2026-04-24 09:16:31,506 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049220
+2026-04-24 09:16:31,508 | INFO | Fold 1 | Epoch 43/75 | Train Loss=0.048204 | Test Loss=0.049220
+2026-04-24 09:20:38,423 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048546
+2026-04-24 09:24:14,452 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048098
+2026-04-24 09:24:58,326 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049189
+2026-04-24 09:24:58,328 | INFO | Fold 1 | Epoch 44/75 | Train Loss=0.048098 | Test Loss=0.049189
+2026-04-24 09:29:05,245 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047715
+2026-04-24 09:32:41,286 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048120
+2026-04-24 09:33:25,165 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049550
+2026-04-24 09:33:25,167 | INFO | Fold 1 | Epoch 45/75 | Train Loss=0.048120 | Test Loss=0.049550
+2026-04-24 09:37:32,119 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047472
+2026-04-24 09:41:08,159 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048036
+2026-04-24 09:41:52,109 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048771
+2026-04-24 09:41:52,110 | INFO | Fold 1 | Epoch 46/75 | Train Loss=0.048036 | Test Loss=0.048771
+2026-04-24 09:45:59,077 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048434
+2026-04-24 09:49:35,094 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048389
+2026-04-24 09:50:18,970 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049835
+2026-04-24 09:50:18,971 | INFO | Fold 1 | Epoch 47/75 | Train Loss=0.048389 | Test Loss=0.049835
+2026-04-24 09:54:25,901 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048312
+2026-04-24 09:58:01,920 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048581
+2026-04-24 09:58:45,809 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049666
+2026-04-24 09:58:45,810 | INFO | Fold 1 | Epoch 48/75 | Train Loss=0.048581 | Test Loss=0.049666
+2026-04-24 10:02:52,784 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048214
+2026-04-24 10:06:28,899 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048117
+2026-04-24 10:07:12,793 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050522
+2026-04-24 10:07:12,794 | INFO | Fold 1 | Epoch 49/75 | Train Loss=0.048117 | Test Loss=0.050522
+2026-04-24 10:11:19,749 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047757
+2026-04-24 10:14:55,824 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047971
+2026-04-24 10:15:39,716 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048575
+2026-04-24 10:15:39,717 | INFO | Fold 1 | Epoch 50/75 | Train Loss=0.047971 | Test Loss=0.048575
+2026-04-24 10:19:46,674 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.048156
+2026-04-24 10:23:22,721 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047793
+2026-04-24 10:24:06,630 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048409
+2026-04-24 10:24:06,633 | INFO | Fold 1 | Epoch 51/75 | Train Loss=0.047793 | Test Loss=0.048409
+2026-04-24 10:28:13,602 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047311
+2026-04-24 10:31:49,627 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047785
+2026-04-24 10:32:33,511 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048570
+2026-04-24 10:32:33,513 | INFO | Fold 1 | Epoch 52/75 | Train Loss=0.047785 | Test Loss=0.048570
+2026-04-24 10:36:40,460 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047656
+2026-04-24 10:40:16,493 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047760
+2026-04-24 10:41:00,469 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.049378
+2026-04-24 10:41:00,470 | INFO | Fold 1 | Epoch 53/75 | Train Loss=0.047760 | Test Loss=0.049378
+2026-04-24 10:45:07,411 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047793
+2026-04-24 10:48:43,439 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.048045
+2026-04-24 10:49:27,312 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.050425
+2026-04-24 10:49:27,314 | INFO | Fold 1 | Epoch 54/75 | Train Loss=0.048045 | Test Loss=0.050425
+2026-04-24 10:53:34,255 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047237
+2026-04-24 10:57:10,282 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047140
+2026-04-24 10:57:54,158 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.048940
+2026-04-24 10:57:54,160 | INFO | Fold 1 | Epoch 55/75 | Train Loss=0.047140 | Test Loss=0.048940
+2026-04-24 11:02:01,076 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047268
+2026-04-24 11:05:37,104 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 469/469 | Avg Loss=0.047497
+2026-04-24 11:06:21,006 | INFO | [FASHION | DIFFUSION | Fold 1] | Test Batch 79/79 | Avg Loss=0.047805
+2026-04-24 11:06:21,007 | INFO | Fold 1 | Epoch 56/75 | Train Loss=0.047497 | Test Loss=0.047805
+2026-04-24 11:10:28,082 | INFO | [FASHION | DIFFUSION | Fold 1] | Train Batch 250/469 | Avg Loss=0.047493

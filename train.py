@@ -24,6 +24,7 @@ os.environ.setdefault("XDG_CACHE_HOME", str(MPL_CACHE_DIR))
 
 import matplotlib
 import numpy as np
+from PIL import Image
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
@@ -1123,6 +1124,56 @@ def plot_image_grid(
     plt.close(figure)
 
 
+def save_native_image_grid(
+    images: torch.Tensor,
+    save_path: Path,
+    *,
+    num_cols: int | None = None,
+    padding: int = 0,
+    scale: int = 1,
+) -> None:
+    """Save a compact contact sheet without matplotlib enlargement."""
+
+    if padding < 0:
+        raise ValueError("padding must be non-negative")
+    if scale < 1:
+        raise ValueError("scale must be at least 1")
+
+    save_path.parent.mkdir(parents=True, exist_ok=True)
+    display_images = prepare_display_images(images).detach().cpu().float().clamp(0.0, 1.0)
+    num_images, channels, height, width = display_images.shape
+    if num_images < 1:
+        raise ValueError("images must contain at least one image")
+
+    resolved_cols = num_cols or math.ceil(math.sqrt(num_images))
+    resolved_cols = max(1, min(resolved_cols, num_images))
+    num_rows = math.ceil(num_images / resolved_cols)
+    sheet = Image.new(
+        "RGB",
+        (
+            resolved_cols * width + (resolved_cols - 1) * padding,
+            num_rows * height + (num_rows - 1) * padding,
+        ),
+        "white",
+    )
+
+    for image_idx, image in enumerate(display_images):
+        if channels == 1:
+            rgb_image = image.repeat(3, 1, 1)
+        else:
+            rgb_image = image[:3]
+        array = (rgb_image.permute(1, 2, 0).numpy() * 255.0).round().astype(np.uint8)
+        tile = Image.fromarray(array, mode="RGB")
+        x = (image_idx % resolved_cols) * (width + padding)
+        y = (image_idx // resolved_cols) * (height + padding)
+        sheet.paste(tile, (x, y))
+
+    if scale > 1:
+        nearest = getattr(getattr(Image, "Resampling", Image), "NEAREST")
+        sheet = sheet.resize((sheet.width * scale, sheet.height * scale), resample=nearest)
+    sheet.save(save_path)
+
+
 def plot_loss_curves(
     train_losses: list[float],
     val_losses: list[float],
@@ -1928,6 +1979,12 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
             ),
             legacy_path=legacy_paths["samples"],
         )
+        native_sample_path = run_paths["samples"] / "generated_samples_native_grid.png"
+        logged_native_sample_paths = save_and_log_artifact(
+            "Diffusion native sample grid",
+            native_sample_path,
+            lambda target: save_native_image_grid(generated_samples, target),
+        )
         snapshot_path = run_paths["plots"] / "diffusion_snapshots.png"
         logged_snapshot_paths = save_and_log_artifact(
             "Diffusion reverse-process snapshots",
@@ -1975,7 +2032,7 @@ def run_single_experiment(config: ExperimentConfig, cli_args: list[str], device:
         final_summary["artifacts"]["plots"] = (
             logged_loss_curve_paths + logged_snapshot_paths + logged_reconstruction_paths
         )
-        final_summary["artifacts"]["samples"] = logged_sample_paths
+        final_summary["artifacts"]["samples"] = logged_sample_paths + logged_native_sample_paths
     else:
         dataset = get_dataset(config, config.dataset, train=True)
         best_val_subset = Subset(dataset, best_payload["val_indices"])

@@ -1,0 +1,124 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Image Reconstruction Study</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <header class="site-header">
+      <nav aria-label="Primary">
+        <a href="#results">Results</a>
+        <a href="#models">Models</a>
+        <a href="#runs">Runs</a>
+      </nav>
+      <section class="hero">
+        <div>
+          <p class="eyebrow">Diffusion image reconstruction</p>
+          <h1>Dataset-aware generative modeling across MNIST, FashionMNIST, and CIFAR10.</h1>
+        </div>
+        <figure class="hero-grid">
+          <img src="assets/cifar10-contact.png" alt="CIFAR10 compact generated sample grid" />
+          <figcaption>CIFAR10 samples shown at native contact-sheet scale.</figcaption>
+        </figure>
+      </section>
+    </header>
+
+    <main>
+      <section id="results" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">Presentation figures</p>
+          <h2>Generated samples and reconstructions</h2>
+        </div>
+        <div class="gallery">
+          <article class="figure-block figure-wide">
+            <img src="assets/cifar10-contact.png" alt="CIFAR10 generated samples in a native-size grid" />
+            <h3>CIFAR10 generation</h3>
+            <p>Native 32x32 samples are shown as a compact contact sheet to avoid artificial zoom blur.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/mnist-contact.png" alt="MNIST generated digit samples" />
+            <h3>MNIST generation</h3>
+            <p>Digit samples from the trained legacy grayscale diffusion model.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/mnist-reconstructions.png" alt="MNIST reconstruction preview" />
+            <h3>MNIST reconstruction</h3>
+            <p>Clean, noisy, and reconstructed views from the denoising pipeline.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/cifar10-reconstructions.png" alt="CIFAR10 reconstruction preview" />
+            <h3>CIFAR10 reconstruction</h3>
+            <p>RGB reconstructions from the ADM diffusion model.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="models" class="section model-section">
+        <div class="section-heading">
+          <p class="eyebrow">Modeling choices</p>
+          <h2>Three datasets, two diffusion regimes</h2>
+        </div>
+        <div class="model-grid">
+          <article>
+            <span>01</span>
+            <h3>MNIST</h3>
+            <p>Legacy grayscale diffusion at native 28x28 resolution.</p>
+          </article>
+          <article>
+            <span>02</span>
+            <h3>FashionMNIST</h3>
+            <p>Same grayscale protocol as MNIST, rerun with longer wall time to complete artifacts.</p>
+          </article>
+          <article>
+            <span>03</span>
+            <h3>CIFAR10</h3>
+            <p>ADM RGB diffusion at native 32x32 resolution with compact sample export for presentation.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="runs" class="section runs-section">
+        <div class="section-heading">
+          <p class="eyebrow">Runbook</p>
+          <h2>Commands to finish the portfolio</h2>
+        </div>
+        <div class="run-grid">
+          <article>
+            <h3>Finish FashionMNIST</h3>
+            <pre><code>CLEAR_INCOMPLETE=1 sbatch slurm/final_study/train_fashion_array.slurm
+sbatch slurm/final_study/eval_all_array.slurm
+sbatch slurm/final_study/finalize.slurm</code></pre>
+          </article>
+          <article>
+            <h3>MNIST presentation rerun</h3>
+            <pre><code>python train.py \
+  --config configs/diffusion/mnist.yaml \
+  --epochs 100 \
+  --sample-count 100 \
+  --run-name mnist_showcase_seed001 \
+  --seed 1</code></pre>
+          </article>
+          <article>
+            <h3>Fashion presentation rerun</h3>
+            <pre><code>python train.py \
+  --config configs/diffusion/fashion.yaml \
+  --epochs 125 \
+  --sample-count 100 \
+  --run-name fashion_showcase_seed001 \
+  --seed 1</code></pre>
+          </article>
+          <article>
+            <h3>Checkpoint-only sample grid</h3>
+            <pre><code>python evaluate.py \
+  --checkpoint path/to/checkpoints/best.pt \
+  --mode sample \
+  --artifact-sample-count 100 \
+  --sampling-steps 100</code></pre>
+          </article>
+        </div>
+      </section>
+    </main>
+  </body>
+</html>
