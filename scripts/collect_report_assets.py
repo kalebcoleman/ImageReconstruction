@@ -24,6 +24,7 @@ SEARCH_DIRS = (
     "figures",
     "plots",
     "images",
+    "docs/assets",
     "deliverables",
 )
 ASSET_DIRS = {
@@ -63,6 +64,12 @@ LIKELY_PLOT_KEYWORDS = (
     "mse",
     "latent",
 )
+GENERIC_REPORT_STEMS = {
+    "generated_samples",
+    "loss_curve",
+    "reconstructions",
+    "diffusion_snapshots",
+}
 
 
 @dataclass(frozen=True)
@@ -76,10 +83,12 @@ class Candidate:
 
 @dataclass
 class Summary:
+    found: list[Path] = field(default_factory=list)
     copied: list[tuple[Path, Path]] = field(default_factory=list)
     skipped: list[Path] = field(default_factory=list)
     placeholders: list[Path] = field(default_factory=list)
     grids: list[Path] = field(default_factory=list)
+    docs_images: list[tuple[str, Path, bool]] = field(default_factory=list)
     missing: list[str] = field(default_factory=list)
     uncategorized: list[Path] = field(default_factory=list)
     searched_missing_dirs: list[Path] = field(default_factory=list)
@@ -141,7 +150,6 @@ def is_likely_plot(path: Path) -> bool:
 
 def discover_candidates(source_dirs: list[Path], docs_assets: Path, summary: Summary) -> list[Candidate]:
     candidates: list[Candidate] = []
-    resolved_assets = docs_assets.resolve()
     for source_root in source_dirs:
         if not source_root.exists():
             summary.searched_missing_dirs.append(source_root)
@@ -151,15 +159,11 @@ def discover_candidates(source_dirs: list[Path], docs_assets: Path, summary: Sum
         for source in sorted(source_root.rglob("*")):
             if not source.is_file() or source.suffix.lower() not in IMAGE_SUFFIXES:
                 continue
-            try:
-                if source.resolve().is_relative_to(resolved_assets):
-                    continue
-            except OSError:
-                pass
             dataset = classify_dataset(source)
             tags = classify_tags(source)
             likely_plot = is_likely_plot(source)
             if dataset or likely_plot:
+                summary.found.append(source)
                 candidates.append(
                     Candidate(
                         source=source,
@@ -179,29 +183,54 @@ def safe_name(value: str) -> str:
     return cleaned or "asset"
 
 
-def duplicate_names(candidates: list[Candidate]) -> set[tuple[str, str]]:
-    counts: dict[tuple[str, str], int] = {}
-    for candidate in candidates:
-        group = candidate.dataset or "combined"
-        key = (group, candidate.source.name)
-        counts[key] = counts.get(key, 0) + 1
-    return {key for key, count in counts.items() if count > 1}
-
-
-def destination_for(candidate: Candidate, duplicates: set[tuple[str, str]]) -> Path:
+def destination_for(candidate: Candidate) -> Path:
     group = candidate.dataset or "combined"
     filename = candidate.source.name
-    if (group, filename) in duplicates:
-        try:
-            relative = candidate.source.relative_to(candidate.source_root)
-        except ValueError:
-            relative = candidate.source
-        prefix = safe_name("_".join(relative.with_suffix("").parts[:-1]))
-        filename = f"{prefix}__{filename}"
+    if not is_in_tree(candidate.source, Path("docs/assets")):
+        stem = candidate.source.stem
+        if stem in GENERIC_REPORT_STEMS or stem.startswith("study_"):
+            try:
+                relative = candidate.source.relative_to(candidate.source_root)
+            except ValueError:
+                relative = candidate.source
+            prefix = safe_name("_".join(relative.with_suffix("").parts[:-1]))
+            if prefix:
+                filename = f"{prefix}__{filename}"
     return ASSET_DIRS[group] / filename
 
 
+def mtime(path: Path) -> float:
+    try:
+        return path.stat().st_mtime
+    except OSError:
+        return 0.0
+
+
+def is_in_tree(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+        return True
+    except (OSError, ValueError):
+        return False
+
+
+def select_newest_by_destination(candidates: list[Candidate]) -> list[Candidate]:
+    newest: dict[Path, Candidate] = {}
+    for candidate in candidates:
+        target = destination_for(candidate)
+        existing = newest.get(target)
+        if existing is None or mtime(candidate.source) > mtime(existing.source):
+            newest[target] = candidate
+    return [newest[target] for target in sorted(newest)]
+
+
 def copy_asset(source: Path, target: Path, *, overwrite: bool, dry_run: bool, summary: Summary) -> bool:
+    try:
+        if source.resolve() == target.resolve():
+            summary.skipped.append(target)
+            return False
+    except OSError:
+        pass
     if target.exists() and not overwrite:
         summary.skipped.append(target)
         return False
@@ -462,14 +491,200 @@ def create_combined_grids(copied_targets: list[Path], *, overwrite: bool, dry_ru
     )
 
 
+DIFFUSION_GRID_SPECS = {
+    "mnist": {
+        "label": "MNIST",
+        "asset_dir": "mnist",
+        "sample_size": 28,
+        "target_prefix": "mnist",
+        "patterns": (
+            "*contact_100_native_1x_nopad.png",
+            "*contact_100_native_1x.png",
+            "*generated_samples_native_grid.png",
+        ),
+    },
+    "fashion_mnist": {
+        "label": "Fashion-MNIST",
+        "asset_dir": "fashion_mnist",
+        "sample_size": 28,
+        "target_prefix": "fashion",
+        "patterns": (
+            "*contact_100_native_1x_nopad.png",
+            "*contact_100_native_1x.png",
+            "*generated_samples_native_grid.png",
+        ),
+    },
+    "cifar10": {
+        "label": "CIFAR-10",
+        "asset_dir": "cifar10",
+        "sample_size": 32,
+        "target_prefix": "cifar10",
+        "patterns": (
+            "*contact_100_native_1x_nopad.png",
+            "*contact_100_native_1x.png",
+            "*generated_samples_native_grid.png",
+        ),
+    },
+}
+
+
+def newest_existing(paths: list[Path]) -> Path | None:
+    existing = [path for path in paths if path.exists()]
+    if not existing:
+        return None
+    return max(existing, key=lambda path: (mtime(path), path.as_posix()))
+
+
+def find_native_diffusion_grid_source(dataset: str, copied_targets: list[Path]) -> Path | None:
+    spec = DIFFUSION_GRID_SPECS[dataset]
+    roots = [ASSET_DIRS[spec["asset_dir"]]]
+    candidates: list[Path] = []
+    for root in roots:
+        for pattern in spec["patterns"]:
+            candidates.extend(root.glob(pattern))
+    candidates.extend(
+        path
+        for path in copied_targets
+        if ASSET_DIRS[spec["asset_dir"]] in path.parents
+        and any(path.match(pattern) for pattern in spec["patterns"])
+    )
+    return newest_existing(candidates)
+
+
+def create_missing_image(
+    path: Path,
+    text: str,
+    *,
+    size: tuple[int, int],
+    overwrite: bool,
+    dry_run: bool,
+    summary: Summary,
+) -> None:
+    if path.exists() and not overwrite:
+        summary.skipped.append(path)
+        return
+    if dry_run:
+        summary.grids.append(path)
+        return
+    path.parent.mkdir(parents=True, exist_ok=True)
+    image = Image.new("RGB", size, "#fffdfa")
+    draw = ImageDraw.Draw(image)
+    font = load_font(18 if size[0] <= 320 else 36)
+    draw.rectangle((0, 0, size[0] - 1, size[1] - 1), outline="#b13f32", width=max(2, size[0] // 160))
+    draw_wrapped_text(draw, (max(8, size[0] // 18), max(8, size[1] // 6)), text, font, "#5f554d", width=34)
+    image.save(path)
+    summary.grids.append(path)
+
+
+def create_diffusion_grid_versions(copied_targets: list[Path], *, overwrite: bool, dry_run: bool, summary: Summary) -> None:
+    combined_dir = ASSET_DIRS["combined"]
+    for dataset, spec in DIFFUSION_GRID_SPECS.items():
+        source = find_native_diffusion_grid_source(dataset, copied_targets)
+        one_x = combined_dir / f"{spec['target_prefix']}_diffusion_grid_1x.png"
+        large = combined_dir / f"{spec['target_prefix']}_diffusion_grid_nearest_large.png"
+        sample_size = int(spec["sample_size"])
+
+        if source is None:
+            summary.missing.append(
+                f"{spec['label']} native diffusion sample grid ({sample_size}x{sample_size} samples)"
+            )
+            create_missing_image(
+                one_x,
+                f"{spec['label']} diffusion grid missing\nExpected native {sample_size}x{sample_size} samples.",
+                size=(sample_size * 10, sample_size * 10),
+                overwrite=overwrite,
+                dry_run=dry_run,
+                summary=summary,
+            )
+            create_missing_image(
+                large,
+                f"{spec['label']} diffusion grid missing\nRun collection after samples are available.",
+                size=(sample_size * 40, sample_size * 40),
+                overwrite=overwrite,
+                dry_run=dry_run,
+                summary=summary,
+            )
+            continue
+
+        if one_x.exists() and not overwrite:
+            summary.skipped.append(one_x)
+        elif dry_run:
+            summary.grids.append(one_x)
+        else:
+            one_x.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, one_x)
+            summary.grids.append(one_x)
+
+        if large.exists() and not overwrite:
+            summary.skipped.append(large)
+            continue
+        if dry_run:
+            summary.grids.append(large)
+            continue
+
+        with Image.open(source) as image:
+            rgb = image.convert("RGB")
+            resized = rgb.resize((rgb.width * 4, rgb.height * 4), resample=Image.Resampling.NEAREST)
+            resized.save(large)
+        summary.grids.append(large)
+
+
+def extract_docs_image_sources(index_path: Path) -> list[str]:
+    if not index_path.exists():
+        return []
+    text = index_path.read_text(encoding="utf-8")
+    markdown = re.findall(r"!\[[^\]]*\]\(([^)]+)\)", text)
+    html = re.findall(r"<img\b[^>]*\bsrc=[\"']([^\"']+)[\"']", text, flags=re.IGNORECASE)
+    sources = []
+    for source in markdown + html:
+        clean = source.split("#", 1)[0].split("?", 1)[0].strip()
+        if clean and not re.match(r"^[a-z]+://", clean):
+            sources.append(clean)
+    return sources
+
+
+def record_docs_images(index_path: Path, summary: Summary) -> None:
+    for source in extract_docs_image_sources(index_path):
+        resolved = (index_path.parent / source).resolve()
+        summary.docs_images.append((source, resolved, resolved.exists()))
+        if not resolved.exists():
+            summary.missing.append(f"docs/index.md image link is missing: {source}")
+
+
+def warn_missing_expected_assets(summary: Summary) -> None:
+    expected = (
+        Path("docs/assets/combined/mnist_diffusion_grid_1x.png"),
+        Path("docs/assets/combined/fashion_diffusion_grid_1x.png"),
+        Path("docs/assets/combined/cifar10_diffusion_grid_1x.png"),
+        Path("docs/assets/combined/mnist_diffusion_grid_nearest_large.png"),
+        Path("docs/assets/combined/fashion_diffusion_grid_nearest_large.png"),
+        Path("docs/assets/combined/cifar10_diffusion_grid_nearest_large.png"),
+        Path("docs/assets/combined/vae_interpolation_better.png"),
+    )
+    for path in expected:
+        if not path.exists():
+            summary.missing.append(f"expected report asset missing: {path}")
+
+
 def print_summary(summary: Summary) -> None:
     print("\nAsset collection summary")
+    print(f"- images found: {len(summary.found)}")
     print(f"- images copied/planned: {len(summary.copied)}")
     print(f"- existing files skipped: {len(summary.skipped)}")
     print(f"- PCA placeholders created/planned: {len(summary.placeholders)}")
     print(f"- grids generated/planned: {len(summary.grids)}")
+    print(f"- docs/index.md images referenced: {len(summary.docs_images)}")
     print(f"- missing source folders: {len(summary.searched_missing_dirs)}")
     print(f"- uncategorized images ignored: {len(summary.uncategorized)}")
+    if summary.docs_images:
+        print("- images used by docs/index.md:")
+        for source, resolved, exists in summary.docs_images:
+            status = "ok" if exists else "missing"
+            print(f"  - {source} -> {resolved} [{status}]")
+    if summary.copied:
+        print("- images copied/planned:")
+        for source, target in summary.copied:
+            print(f"  - {source} -> {target}")
     if summary.missing:
         print("- missing expected visuals:")
         for item in dict.fromkeys(summary.missing):
@@ -500,20 +715,24 @@ def main() -> int:
     if args.source_dirs:
         source_dirs.extend(Path(path) for path in args.source_dirs)
 
-    candidates = discover_candidates(source_dirs, Path("docs/assets"), summary)
-    duplicates = duplicate_names(candidates)
+    candidates = select_newest_by_destination(discover_candidates(source_dirs, Path("docs/assets"), summary))
     copied_targets: list[Path] = []
     for candidate in candidates:
+        target = destination_for(candidate)
+        if is_in_tree(candidate.source, Path("docs/assets")):
+            copied_targets.append(candidate.source)
+            continue
         if candidate.dataset:
-            target = destination_for(candidate, duplicates)
             copy_asset(candidate.source, target, overwrite=args.overwrite, dry_run=args.dry_run, summary=summary)
             copied_targets.append(target)
         elif candidate.likely_plot:
-            target = destination_for(candidate, duplicates)
             copy_asset(candidate.source, target, overwrite=args.overwrite, dry_run=args.dry_run, summary=summary)
             copied_targets.append(target)
 
     create_combined_grids(copied_targets, overwrite=args.overwrite, dry_run=args.dry_run, summary=summary)
+    create_diffusion_grid_versions(copied_targets, overwrite=args.overwrite, dry_run=args.dry_run, summary=summary)
+    record_docs_images(Path("docs/index.md"), summary)
+    warn_missing_expected_assets(summary)
     print_summary(summary)
     return 0
 

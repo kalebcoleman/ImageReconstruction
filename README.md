@@ -178,6 +178,10 @@ Report assets for GitHub Pages can be copied into `docs/assets/` with:
 python scripts/collect_report_assets.py
 ```
 
+The GitHub Pages site reads images from `docs/assets/`. Diffusion sample grids
+include both compact true-1x versions that preserve native `28x28` or `32x32`
+samples and nearest-neighbor enlarged versions for sharper browser viewing.
+
 ## GitHub Pages Setup
 
 To publish the documentation site with GitHub Pages:
