@@ -2,151 +2,154 @@
 
 ## Overview
 
-This project compares dimensionality reduction and reconstruction approaches across MNIST, Fashion-MNIST, and CIFAR-10. The main comparison is between PCA as a classical linear baseline and autoencoders as a neural-network reconstruction approach.
+This project compares PCA and autoencoder-based reconstruction methods. PCA is the classical dimensionality-reduction baseline, while autoencoders are the neural-network reconstruction approach.
 
-The core analysis is PCA vs autoencoder reconstruction quality. Variational autoencoders and diffusion are included as generative extensions: the VAE bridges reconstruction and sampling through a learned latent distribution, while the diffusion model explores modern image generation beyond the main reconstruction task.
+The main focus is reconstruction quality for PCA vs autoencoders. VAE, interpolation, denoising, and diffusion results are included to show related extensions. Diffusion is an extra-credit generative extension, not the main focus of the project.
 
 ## Main Research Question
 
-How do PCA and autoencoder-based methods compare for image reconstruction quality across MNIST, Fashion-MNIST, and CIFAR-10?
+How do PCA and autoencoder-based models compare for image reconstruction quality across MNIST and Fashion-MNIST?
 
 ## Project Roles
 
-- **PCA analysis**: teammate
-- **Autoencoder, VAE, and diffusion extension**: me
+- **PCA analysis and visuals**: teammate
+- **Autoencoder, VAE/interpolation, denoising, and diffusion extension**: me
 
-## Datasets
+## Main Comparison: PCA vs Autoencoder
 
-- **MNIST**: 28x28 grayscale handwritten digits.
-- **Fashion-MNIST**: 28x28 grayscale clothing images.
-- **CIFAR-10**: 32x32 RGB natural images with more complex objects, color, and background variation.
+This section is reserved for the final PCA vs AE comparison once teammate PCA results are merged.
 
-## Main Models
+### PCA Reconstruction Grids
 
-### PCA
+![PCA MNIST reconstruction placeholder](assets/placeholders/pca_mnist_reconstructions_placeholder.png)
 
-PCA is the classical baseline for this project. It reconstructs images by projecting them into a lower-dimensional linear subspace and then mapping them back to image space.
+![PCA Fashion-MNIST reconstruction placeholder](assets/placeholders/pca_fashion_reconstructions_placeholder.png)
 
-**Placeholder for teammate's PCA results and analysis:**
+### AE Reconstruction Grids
 
-- PCA reconstruction grids by dataset
-- PCA metrics by latent dimension or number of principal components
-- PCA qualitative observations
-- PCA strengths and weaknesses compared with autoencoders
+![MNIST AE reconstruction grid](assets/mnist/mnist_ae_recon_latent_16.png)
 
-### Regular Autoencoder
+![MNIST AE latent comparison](assets/mnist/mnist_model_comparison_latent_16.png)
 
-The regular autoencoder is the main neural reconstruction model. It learns an encoder that compresses each image into a latent representation and a decoder that reconstructs the image from that compressed code.
+### Combined PCA vs AE Grids
 
-The AE experiments focus on reconstruction quality, latent-space compression, and metrics such as MSE, PSNR, and SSIM. The key question is whether a nonlinear learned representation can preserve image structure better than PCA at similar latent dimensionalities.
+![Combined PCA vs AE placeholder](assets/placeholders/pca_vs_ae_combined_grid_placeholder.png)
 
-### Variational Autoencoder
+### SSIM / PSNR / MSE Comparison Plots
 
-The VAE extends the autoencoder approach by learning a structured probabilistic latent space. It supports reconstruction, latent sampling, and interpolation experiments.
+![PCA metrics placeholder](assets/placeholders/pca_metrics_placeholder.png)
 
-In this project, the VAE acts as a bridge between reconstruction and generative modeling. It still reconstructs input images, but it also makes it possible to sample new images and interpolate between latent codes to visualize how the learned representation changes smoothly.
+![MNIST metrics by model and latent dimension](assets/mnist/mnist_metrics_vs_latent_by_model.png)
 
-## Main PCA vs Autoencoder Analysis
+## Autoencoder Results
 
-This section is reserved for the final merged comparison between the PCA baseline and the autoencoder results.
+The regular autoencoder compresses each image into a lower-dimensional latent representation and reconstructs the image from that code. These results are the main neural-network comparison point against PCA.
 
-### Reconstruction Comparison Tables
+![MNIST AE reconstruction latent 16](assets/mnist/mnist_ae_recon_latent_16.png)
 
-**Placeholder:** add tables comparing PCA, AE, and VAE reconstruction quality across MNIST, Fashion-MNIST, and CIFAR-10.
+![MNIST AE latent space 16](assets/mnist/mnist_ae_latent_space_16.png)
 
-### SSIM / PSNR / MSE Results
+![MNIST AE loss curve 16](assets/mnist/mnist_ae_loss_curve_16.png)
 
-**Placeholder:** add metric summaries for each dataset and latent dimension.
+## VAE and Latent Space Results
 
-### Latent Dimension Comparisons
+The VAE extends the reconstruction model with a probabilistic latent space. This supports reconstruction, latent sampling, and interpolation between examples.
 
-**Placeholder:** compare how PCA and autoencoder reconstructions change as the latent dimension or number of PCA components increases.
+![MNIST VAE reconstruction latent 16](assets/mnist/mnist_vae_latent_16.png)
 
-### Visual Reconstruction Grids
+![MNIST VAE generated samples](assets/mnist/vae_generated_mnist_latent_16.png)
 
-**Placeholder:** add side-by-side grids showing original images, PCA reconstructions, AE reconstructions, and VAE reconstructions.
+![MNIST VAE interpolation](assets/mnist/vae_interpolation_mnist_latent_16.png)
 
-### Key Takeaways from PCA vs AE
+## Denoising Autoencoder / Noise Robustness
 
-**Placeholder:** summarize where PCA is competitive, where autoencoders improve reconstruction, and how dataset complexity changes the comparison.
+The denoising autoencoder tests whether the model can recover clean images from noisy inputs. This is useful for understanding robustness beyond direct reconstruction.
 
-## Extra Credit / Extension: Diffusion Model
+![MNIST DAE noise reconstruction latent 16](assets/mnist/mnist_dae_noise_0.2_latent_16.png)
 
-Diffusion was added after the main reconstruction work as an extra-credit generative extension. It is not the main project and should be interpreted separately from the PCA vs autoencoder reconstruction comparison.
+![MNIST DAE reconstruction latent 16](assets/mnist/mnist_dae_recon_latent_16.png)
 
-Instead of only reconstructing an input image, the diffusion model explores image generation through iterative denoising. This helped connect the reconstruction models in the main project to modern generative modeling.
+![MNIST DAE loss curve](assets/mnist/mnist_dae_noise_0.2_loss_curve_16.png)
 
-MNIST and Fashion-MNIST generations worked better because those images are simpler: they are grayscale, low resolution, and have less variation than natural images. CIFAR-10 was much harder because it has RGB color, more complex objects, backgrounds, and greater variation across classes.
+## Extra Credit Extension: Diffusion Model
 
-CIFAR generations should be shown at actual `32x32` size and also enlarged using nearest-neighbor interpolation. The actual-size view preserves the true model output, while nearest-neighbor enlargement keeps the pixels crisp instead of making the image look blurry from smoothing.
+Diffusion was added after the main PCA vs AE reconstruction work. It focuses on generation rather than reconstruction.
 
-The diffusion model was intentionally lightweight, so imperfect CIFAR-10 results are expected. Stronger CIFAR generation would require more model capacity, longer training, and more compute.
+MNIST and Fashion-MNIST generations are stronger because they are simpler datasets: grayscale, low resolution, and less visually varied. CIFAR-10 is harder due to RGB channels, object complexity, backgrounds, and higher variation.
 
-## Diffusion Visualizations
+CIFAR samples should be viewed at actual `32x32` size and at nearest-neighbor enlarged size. The actual-size version preserves the model output, while nearest-neighbor enlargement keeps the pixels crisp instead of smoothing them into blur.
 
-Add diffusion outputs here after running the report asset preparation script.
+The diffusion model is intentionally lightweight, so imperfect CIFAR samples are expected.
 
-### MNIST Generations
+### MNIST Diffusion Generations
 
-**Placeholder:** `results/mnist/`
+![MNIST diffusion generations](assets/mnist/mnist_diffusion_generated_latent_32.png)
 
-### Fashion-MNIST Generations
+### Fashion-MNIST Diffusion Generations
 
-**Placeholder:** `results/fashion_mnist/`
+Fashion-MNIST diffusion visuals were not found in the current local output folders. The overview grid below uses a placeholder tile until those outputs are added.
+
+![Fashion-MNIST overview placeholder grid](assets/combined/fashion_ae_vae_diffusion_overview.png)
 
 ### CIFAR Actual-Size Generations
 
-**Placeholder:** `results/cifar10/generations_actual_size.png`
+![CIFAR actual-size generations](assets/cifar10/cifar_generations_actual_size.png)
 
 ### CIFAR Nearest-Neighbor Enlarged Generations
 
-**Placeholder:** `results/cifar10/generations_scaled_nearest.png`
+![CIFAR nearest-neighbor enlarged generations](assets/cifar10/cifar_generations_nearest_enlarged.png)
+
+### Combined Diffusion Overview
+
+![Extra credit diffusion overview](assets/combined/extra_credit_diffusion_overview.png)
+
+![CIFAR diffusion overview](assets/combined/cifar_diffusion_overview.png)
+
+## Full Analysis Placeholder
+
+Add the final written analysis here once PCA results are merged:
+
+- PCA vs AE reconstruction quality
+- Metric trends by latent dimension
+- Strengths and weaknesses
+- Final conclusions
 
 ## Limitations
 
-- PCA results still need to be merged from the teammate's analysis.
-- CIFAR-10 is more difficult for small models because it contains RGB color, complex object structure, and high variation.
-- The diffusion extension needs a larger UNet, longer training, and more compute for stronger CIFAR-10 generations.
-- The final report depends on adding the missing PCA tables and side-by-side PCA vs AE visuals.
+- PCA results are pending from the teammate.
+- The fully connected AE is limited on complex RGB data.
+- CIFAR needs CNNs or larger models for better reconstruction and generation.
+- Diffusion needs more compute and a larger architecture for stronger results.
 
 ## Future Work
 
-- Finish the PCA vs AE comparison tables.
-- Add better side-by-side visual comparisons for PCA, AE, and VAE reconstructions.
-- Improve diffusion with a larger UNet, attention blocks, a cosine noise schedule, EMA weights, and Monsoon GPU sweeps.
-- Expand hyperparameter sweeps across latent dimensions, datasets, seeds, and training lengths.
+- Merge PCA results.
+- Create final PCA vs AE comparison grids.
+- Add a CNN autoencoder for CIFAR.
+- Improve diffusion with a larger UNet, attention, cosine noise schedule, EMA, and Monsoon GPU sweeps.
 
 ## How to Run
 
-The repo supports AE, DAE, VAE, and diffusion runs through `train.py`. Example commands:
+The repo supports AE, DAE, VAE, and diffusion runs through `train.py`. These examples use CLI arguments that already exist in the repo.
 
 ```bash
-# Regular autoencoder reconstruction
+# Regular autoencoder
 python train.py --model ae --dataset mnist --latent-dim 16
 
-# Variational autoencoder reconstruction, generation, and interpolation
+# Denoising autoencoder
+python train.py --model dae --dataset mnist --latent-dim 16 --dae-noise-level 0.2
+
+# Variational autoencoder
 python train.py --model vae --dataset mnist --latent-dim 16
 
-# Diffusion extension using existing configs
+# Diffusion extension with existing configs
 python train.py --config configs/diffusion/mnist.yaml
 python train.py --config configs/diffusion/fashion.yaml
 python train.py --config configs/diffusion/cifar10.yaml
 ```
 
-Prepare report assets:
+Collect copied report assets and regenerate placeholders/grids:
 
 ```bash
-python scripts/prepare_report_assets.py
-```
-
-Preview without copying:
-
-```bash
-python scripts/prepare_report_assets.py --dry-run
-```
-
-Replace existing report assets intentionally:
-
-```bash
-python scripts/prepare_report_assets.py --overwrite
+python scripts/collect_report_assets.py
 ```

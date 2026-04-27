@@ -17,6 +17,19 @@ dataset-appropriate diffusion extension:
 
 ImageNet is not part of the default final study.
 
+## Repository Structure
+
+```text
+.
+├── diffusion/              # DDPM model, scheduler, training, and sampling code
+├── scripts/                # Utility scripts for reports and visualizations
+├── docs/                   # GitHub Pages project website
+├── results/                # Final selected results and figures
+├── archived_experiments/   # Older runs and exploratory outputs
+├── train.py                # Main training entry point
+└── README.md
+```
+
 ## Main Entry Points
 
 - [`train.py`](train.py): train one run from CLI flags or a config
@@ -148,23 +161,21 @@ change the integer upscale factor.
 Current copied deliverables are indexed in [`deliverables/README.md`](deliverables/README.md).
 The GitHub Pages project writeup lives at [`docs/index.md`](docs/index.md).
 
-## Final Project Results
+## Final Project Website
 
-The main project is a PCA vs autoencoder reconstruction comparison. PCA is the
-classical dimensionality-reduction baseline, while the autoencoder side tests a
-learned nonlinear reconstruction model and a VAE extension for sampling and
-interpolation.
+The final project website writeup is [`docs/index.md`](docs/index.md). The main
+project is a PCA vs autoencoder reconstruction comparison: PCA is the classical
+dimensionality-reduction baseline, while the autoencoder side tests learned
+nonlinear reconstruction with AE, DAE, and VAE experiments.
 
-Diffusion is included as extra credit, not as the main analysis. It explores
+Diffusion is included as extra credit, not as the main project. It explores
 generation after the reconstruction work and should be reported separately from
-the PCA vs AE comparison. CIFAR-10 diffusion figures should be shown at actual
-`32x32` size and, for enlarged views, with nearest-neighbor scaling so the
-native pixels remain crisp.
+the PCA vs AE comparison.
 
-Report assets can be organized into stable dataset folders with:
+Report assets for GitHub Pages can be copied into `docs/assets/` with:
 
 ```bash
-python scripts/prepare_report_assets.py
+python scripts/collect_report_assets.py
 ```
 
 ## GitHub Pages Setup

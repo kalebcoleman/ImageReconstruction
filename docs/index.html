@@ -9,92 +9,108 @@
   <body>
     <header class="site-header">
       <nav aria-label="Primary">
-        <a href="#analysis">Analysis</a>
-        <a href="#models">Models</a>
-        <a href="#extension">Extension</a>
+        <a href="#comparison">Comparison</a>
+        <a href="#autoencoders">Autoencoders</a>
+        <a href="#diffusion">Diffusion</a>
       </nav>
       <section class="hero">
         <div>
           <p class="eyebrow">PCA vs autoencoders</p>
-          <h1>Image reconstruction across MNIST, Fashion-MNIST, and CIFAR-10.</h1>
+          <h1>Image reconstruction across MNIST and Fashion-MNIST.</h1>
         </div>
         <figure class="hero-grid">
-          <img src="assets/mnist-reconstructions.png" alt="MNIST reconstruction preview" />
-          <figcaption>Main project focus: comparing classical PCA reconstruction with learned autoencoder reconstructions.</figcaption>
+          <img src="assets/combined/mnist_ae_vae_diffusion_overview.png" alt="MNIST AE, VAE, and diffusion overview" />
+          <figcaption>Main project focus: PCA vs learned autoencoder reconstruction. Diffusion is extra credit.</figcaption>
         </figure>
       </section>
     </header>
 
     <main>
-      <section id="analysis" class="section">
+      <section id="comparison" class="section">
         <div class="section-heading">
-          <p class="eyebrow">Research question</p>
-          <h2>How do PCA and autoencoder-based methods compare for reconstruction quality?</h2>
+          <p class="eyebrow">Main comparison</p>
+          <h2>PCA results will be merged beside the autoencoder outputs.</h2>
+        </div>
+        <div class="gallery">
+          <article class="figure-block">
+            <img src="assets/placeholders/pca_mnist_reconstructions_placeholder.png" alt="PCA MNIST reconstruction placeholder" />
+            <h3>PCA MNIST</h3>
+            <p>Placeholder for teammate PCA reconstruction visuals.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/mnist/mnist_ae_recon_latent_16.png" alt="MNIST autoencoder reconstruction" />
+            <h3>AE MNIST</h3>
+            <p>Autoencoder reconstruction at latent dimension 16.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/placeholders/pca_vs_ae_combined_grid_placeholder.png" alt="Combined PCA versus AE placeholder" />
+            <h3>Combined grid</h3>
+            <p>Reserved for final PCA vs AE side-by-side comparisons.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="autoencoders" class="section model-section">
+        <div class="section-heading">
+          <p class="eyebrow">Autoencoder work</p>
+          <h2>AE, VAE, interpolation, and denoising outputs.</h2>
         </div>
         <div class="model-grid">
           <article>
             <span>01</span>
-            <h3>PCA baseline</h3>
-            <p>Classical dimensionality reduction and reconstruction analysis. Teammate results will be merged here.</p>
+            <h3>Regular AE</h3>
+            <p>Latent compression and image reconstruction.</p>
           </article>
           <article>
             <span>02</span>
-            <h3>Autoencoder</h3>
-            <p>Neural reconstruction through latent-space compression, evaluated with MSE, PSNR, SSIM, and visual grids.</p>
+            <h3>VAE</h3>
+            <p>Reconstruction plus latent sampling and interpolation.</p>
           </article>
           <article>
             <span>03</span>
-            <h3>VAE</h3>
-            <p>Probabilistic latent reconstruction with sampling and interpolation as a bridge toward generative modeling.</p>
+            <h3>DAE</h3>
+            <p>Noise robustness through denoising reconstruction.</p>
           </article>
-        </div>
-      </section>
-
-      <section id="models" class="section model-section">
-        <div class="section-heading">
-          <p class="eyebrow">Main comparison</p>
-          <h2>Placeholders for the final PCA vs AE evidence</h2>
-        </div>
-        <div class="run-grid">
-          <article>
-            <h3>Metric tables</h3>
-            <p>Add MSE, PSNR, and SSIM tables by dataset and latent dimension.</p>
-          </article>
-          <article>
-            <h3>Latent dimensions</h3>
-            <p>Compare PCA components against autoencoder latent sizes.</p>
-          </article>
-          <article>
-            <h3>Visual grids</h3>
-            <p>Show originals, PCA reconstructions, AE reconstructions, and VAE reconstructions side by side.</p>
-          </article>
-          <article>
-            <h3>Takeaways</h3>
-            <p>Summarize where PCA is competitive and where learned nonlinear reconstructions improve quality.</p>
-          </article>
-        </div>
-      </section>
-
-      <section id="extension" class="section">
-        <div class="section-heading">
-          <p class="eyebrow">Extra credit / extension</p>
-          <h2>Diffusion generation after the reconstruction work</h2>
         </div>
         <div class="gallery">
           <article class="figure-block">
-            <img src="assets/mnist-contact.png" alt="MNIST generated digit samples" />
-            <h3>MNIST generations</h3>
-            <p>MNIST works better because the images are simple grayscale digits.</p>
-          </article>
-          <article class="figure-block figure-wide">
-            <img src="assets/cifar10-contact.png" alt="CIFAR-10 generated samples in a native-size grid" />
-            <h3>CIFAR-10 generations</h3>
-            <p>CIFAR-10 is harder because it has RGB color, complex objects, and more variation.</p>
+            <img src="assets/mnist/vae_interpolation_mnist_latent_16.png" alt="MNIST VAE interpolation" />
+            <h3>VAE interpolation</h3>
+            <p>Smooth latent-space transitions between generated examples.</p>
           </article>
           <article class="figure-block">
-            <img src="assets/cifar10-reconstructions.png" alt="CIFAR-10 reconstruction preview" />
-            <h3>Display note</h3>
-            <p>Show CIFAR outputs at actual 32x32 size and with nearest-neighbor enlargement to avoid smoothing blur.</p>
+            <img src="assets/mnist/mnist_dae_noise_0.2_latent_16.png" alt="MNIST DAE noisy reconstruction" />
+            <h3>Denoising</h3>
+            <p>Recovering clean images from noisy inputs.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="diffusion" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">Extra credit</p>
+          <h2>Diffusion generation after the reconstruction study.</h2>
+        </div>
+        <div class="gallery">
+          <article class="figure-block">
+            <img src="assets/mnist/mnist_diffusion_generated_latent_32.png" alt="MNIST diffusion generations" />
+            <h3>MNIST generation</h3>
+            <p>Simple grayscale images produce stronger generations.</p>
+          </article>
+          <article class="figure-block figure-wide">
+            <img src="assets/cifar10/cifar_generations_actual_size.png" alt="CIFAR actual-size generations" />
+            <h3>CIFAR actual size</h3>
+            <p>Native 32x32 output shown without invented detail.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/cifar10/cifar_generations_nearest_enlarged.png" alt="CIFAR nearest-neighbor enlarged generations" />
+            <h3>CIFAR nearest-neighbor</h3>
+            <p>Enlarged with nearest-neighbor interpolation to avoid smoothing blur.</p>
+          </article>
+          <article class="figure-block figure-wide">
+            <img src="assets/combined/extra_credit_diffusion_overview.png" alt="Combined diffusion overview" />
+            <h3>Overview</h3>
+            <p>Combined diffusion panel with placeholders where source visuals are still missing.</p>
           </article>
         </div>
       </section>
@@ -120,8 +136,8 @@ python train.py --config configs/diffusion/fashion.yaml
 python train.py --config configs/diffusion/cifar10.yaml</code></pre>
           </article>
           <article>
-            <h3>Prepare assets</h3>
-            <pre><code>python scripts/prepare_report_assets.py</code></pre>
+            <h3>Collect assets</h3>
+            <pre><code>python scripts/collect_report_assets.py</code></pre>
           </article>
         </div>
       </section>
