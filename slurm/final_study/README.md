@@ -73,6 +73,28 @@ sbatch slurm/final_study/train_cifar10_array.slurm
 
 Each training array has three tasks by default, one for each seed `1`, `2`, and `3`. The scripts pass `--skip-existing` and `--no-summarize` so completed deterministic runs are reused and array tasks do not compete to write summaries.
 
+To finish the current portfolio with MNIST and FashionMNIST only:
+
+```bash
+sbatch slurm/final_study/train_mnist_array.slurm
+CLEAR_INCOMPLETE=1 sbatch slurm/final_study/train_fashion_array.slurm
+```
+
+Use `CLEAR_INCOMPLETE=1` for FashionMNIST when the previous copied run stopped
+before checkpoints and artifacts were written. After both training arrays
+finish:
+
+```bash
+sbatch slurm/final_study/eval_all_array.slurm
+sbatch slurm/final_study/finalize.slurm
+```
+
+The same training submissions are available as a convenience wrapper:
+
+```bash
+CLEAR_INCOMPLETE=1 bash slurm/final_study/submit_mnist_fashion.sh
+```
+
 ## Submit Evaluation
 
 First evaluation, if metric weights are not cached:

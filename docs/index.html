@@ -3,78 +3,98 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>Image Reconstruction Study</title>
+    <title>PCA vs Autoencoders for Image Reconstruction</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <header class="site-header">
       <nav aria-label="Primary">
-        <a href="#results">Results</a>
+        <a href="#analysis">Analysis</a>
         <a href="#models">Models</a>
-        <a href="#runs">Runs</a>
+        <a href="#extension">Extension</a>
       </nav>
       <section class="hero">
         <div>
-          <p class="eyebrow">Diffusion image reconstruction</p>
-          <h1>Dataset-aware generative modeling across MNIST, FashionMNIST, and CIFAR10.</h1>
+          <p class="eyebrow">PCA vs autoencoders</p>
+          <h1>Image reconstruction across MNIST, Fashion-MNIST, and CIFAR-10.</h1>
         </div>
         <figure class="hero-grid">
-          <img src="assets/cifar10-contact.png" alt="CIFAR10 compact generated sample grid" />
-          <figcaption>CIFAR10 samples shown at native contact-sheet scale.</figcaption>
+          <img src="assets/mnist-reconstructions.png" alt="MNIST reconstruction preview" />
+          <figcaption>Main project focus: comparing classical PCA reconstruction with learned autoencoder reconstructions.</figcaption>
         </figure>
       </section>
     </header>
 
     <main>
-      <section id="results" class="section">
+      <section id="analysis" class="section">
         <div class="section-heading">
-          <p class="eyebrow">Presentation figures</p>
-          <h2>Generated samples and reconstructions</h2>
+          <p class="eyebrow">Research question</p>
+          <h2>How do PCA and autoencoder-based methods compare for reconstruction quality?</h2>
         </div>
-        <div class="gallery">
-          <article class="figure-block figure-wide">
-            <img src="assets/cifar10-contact.png" alt="CIFAR10 generated samples in a native-size grid" />
-            <h3>CIFAR10 generation</h3>
-            <p>Native 32x32 samples are shown as a compact contact sheet to avoid artificial zoom blur.</p>
+        <div class="model-grid">
+          <article>
+            <span>01</span>
+            <h3>PCA baseline</h3>
+            <p>Classical dimensionality reduction and reconstruction analysis. Teammate results will be merged here.</p>
           </article>
-          <article class="figure-block">
-            <img src="assets/mnist-contact.png" alt="MNIST generated digit samples" />
-            <h3>MNIST generation</h3>
-            <p>Digit samples from the trained legacy grayscale diffusion model.</p>
+          <article>
+            <span>02</span>
+            <h3>Autoencoder</h3>
+            <p>Neural reconstruction through latent-space compression, evaluated with MSE, PSNR, SSIM, and visual grids.</p>
           </article>
-          <article class="figure-block">
-            <img src="assets/mnist-reconstructions.png" alt="MNIST reconstruction preview" />
-            <h3>MNIST reconstruction</h3>
-            <p>Clean, noisy, and reconstructed views from the denoising pipeline.</p>
-          </article>
-          <article class="figure-block">
-            <img src="assets/cifar10-reconstructions.png" alt="CIFAR10 reconstruction preview" />
-            <h3>CIFAR10 reconstruction</h3>
-            <p>RGB reconstructions from the ADM diffusion model.</p>
+          <article>
+            <span>03</span>
+            <h3>VAE</h3>
+            <p>Probabilistic latent reconstruction with sampling and interpolation as a bridge toward generative modeling.</p>
           </article>
         </div>
       </section>
 
       <section id="models" class="section model-section">
         <div class="section-heading">
-          <p class="eyebrow">Modeling choices</p>
-          <h2>Three datasets, two diffusion regimes</h2>
+          <p class="eyebrow">Main comparison</p>
+          <h2>Placeholders for the final PCA vs AE evidence</h2>
         </div>
-        <div class="model-grid">
+        <div class="run-grid">
           <article>
-            <span>01</span>
-            <h3>MNIST</h3>
-            <p>Legacy grayscale diffusion at native 28x28 resolution.</p>
+            <h3>Metric tables</h3>
+            <p>Add MSE, PSNR, and SSIM tables by dataset and latent dimension.</p>
           </article>
           <article>
-            <span>02</span>
-            <h3>FashionMNIST</h3>
-            <p>Same grayscale protocol as MNIST, rerun with longer wall time to complete artifacts.</p>
+            <h3>Latent dimensions</h3>
+            <p>Compare PCA components against autoencoder latent sizes.</p>
           </article>
           <article>
-            <span>03</span>
-            <h3>CIFAR10</h3>
-            <p>ADM RGB diffusion at native 32x32 resolution with compact sample export for presentation.</p>
+            <h3>Visual grids</h3>
+            <p>Show originals, PCA reconstructions, AE reconstructions, and VAE reconstructions side by side.</p>
+          </article>
+          <article>
+            <h3>Takeaways</h3>
+            <p>Summarize where PCA is competitive and where learned nonlinear reconstructions improve quality.</p>
+          </article>
+        </div>
+      </section>
+
+      <section id="extension" class="section">
+        <div class="section-heading">
+          <p class="eyebrow">Extra credit / extension</p>
+          <h2>Diffusion generation after the reconstruction work</h2>
+        </div>
+        <div class="gallery">
+          <article class="figure-block">
+            <img src="assets/mnist-contact.png" alt="MNIST generated digit samples" />
+            <h3>MNIST generations</h3>
+            <p>MNIST works better because the images are simple grayscale digits.</p>
+          </article>
+          <article class="figure-block figure-wide">
+            <img src="assets/cifar10-contact.png" alt="CIFAR-10 generated samples in a native-size grid" />
+            <h3>CIFAR-10 generations</h3>
+            <p>CIFAR-10 is harder because it has RGB color, complex objects, and more variation.</p>
+          </article>
+          <article class="figure-block">
+            <img src="assets/cifar10-reconstructions.png" alt="CIFAR-10 reconstruction preview" />
+            <h3>Display note</h3>
+            <p>Show CIFAR outputs at actual 32x32 size and with nearest-neighbor enlargement to avoid smoothing blur.</p>
           </article>
         </div>
       </section>
@@ -82,40 +102,26 @@
       <section id="runs" class="section runs-section">
         <div class="section-heading">
           <p class="eyebrow">Runbook</p>
-          <h2>Commands to finish the portfolio</h2>
+          <h2>Commands used for report assets</h2>
         </div>
         <div class="run-grid">
           <article>
-            <h3>Finish FashionMNIST</h3>
-            <pre><code>CLEAR_INCOMPLETE=1 sbatch slurm/final_study/train_fashion_array.slurm
-sbatch slurm/final_study/eval_all_array.slurm
-sbatch slurm/final_study/finalize.slurm</code></pre>
+            <h3>Autoencoder</h3>
+            <pre><code>python train.py --model ae --dataset mnist --latent-dim 16</code></pre>
           </article>
           <article>
-            <h3>MNIST presentation rerun</h3>
-            <pre><code>python train.py \
-  --config configs/diffusion/mnist.yaml \
-  --epochs 100 \
-  --sample-count 100 \
-  --run-name mnist_showcase_seed001 \
-  --seed 1</code></pre>
+            <h3>VAE</h3>
+            <pre><code>python train.py --model vae --dataset mnist --latent-dim 16</code></pre>
           </article>
           <article>
-            <h3>Fashion presentation rerun</h3>
-            <pre><code>python train.py \
-  --config configs/diffusion/fashion.yaml \
-  --epochs 125 \
-  --sample-count 100 \
-  --run-name fashion_showcase_seed001 \
-  --seed 1</code></pre>
+            <h3>Diffusion extension</h3>
+            <pre><code>python train.py --config configs/diffusion/mnist.yaml
+python train.py --config configs/diffusion/fashion.yaml
+python train.py --config configs/diffusion/cifar10.yaml</code></pre>
           </article>
           <article>
-            <h3>Checkpoint-only sample grid</h3>
-            <pre><code>python evaluate.py \
-  --checkpoint path/to/checkpoints/best.pt \
-  --mode sample \
-  --artifact-sample-count 100 \
-  --sampling-steps 100</code></pre>
+            <h3>Prepare assets</h3>
+            <pre><code>python scripts/prepare_report_assets.py</code></pre>
           </article>
         </div>
       </section>

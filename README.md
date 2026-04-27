@@ -1,7 +1,15 @@
 # Image Reconstruction
 
-This repo keeps the original `ae`, `dae`, and `vae` paths, plus the final
-dataset-appropriate diffusion study:
+This project compares PCA and autoencoder-based methods for image
+reconstruction across MNIST, Fashion-MNIST, and CIFAR-10. PCA is the classical
+baseline handled by my teammate; my side covers regular autoencoders, VAEs,
+latent interpolation/generation experiments, and a diffusion model as an
+extra-credit generative extension.
+
+The final project writeup lives at [`docs/index.md`](docs/index.md).
+
+The repo keeps the original `ae`, `dae`, and `vae` paths, plus the
+dataset-appropriate diffusion extension:
 
 - `mnist`: legacy diffusion, native `28x28`, `1` channel
 - `fashion`: legacy diffusion, native `28x28`, `1` channel
@@ -71,6 +79,15 @@ sbatch slurm/final_study/train_fashion_array.slurm
 sbatch slurm/final_study/train_cifar10_array.slurm
 ```
 
+Current MNIST/Fashion finish pass:
+
+```bash
+sbatch slurm/final_study/train_mnist_array.slurm
+CLEAR_INCOMPLETE=1 sbatch slurm/final_study/train_fashion_array.slurm
+sbatch slurm/final_study/eval_all_array.slurm
+sbatch slurm/final_study/finalize.slurm
+```
+
 First evaluation if metric weights are not cached:
 
 ```bash
@@ -129,8 +146,38 @@ Use `--no-presentation-copies` to skip them or `--presentation-scale 6` to
 change the integer upscale factor.
 
 Current copied deliverables are indexed in [`deliverables/README.md`](deliverables/README.md).
-The GitHub Pages portfolio page lives at [`docs/index.html`](docs/index.html).
-In GitHub, enable Pages with source set to the `docs/` folder on the main branch.
+The GitHub Pages project writeup lives at [`docs/index.md`](docs/index.md).
+
+## Final Project Results
+
+The main project is a PCA vs autoencoder reconstruction comparison. PCA is the
+classical dimensionality-reduction baseline, while the autoencoder side tests a
+learned nonlinear reconstruction model and a VAE extension for sampling and
+interpolation.
+
+Diffusion is included as extra credit, not as the main analysis. It explores
+generation after the reconstruction work and should be reported separately from
+the PCA vs AE comparison. CIFAR-10 diffusion figures should be shown at actual
+`32x32` size and, for enlarged views, with nearest-neighbor scaling so the
+native pixels remain crisp.
+
+Report assets can be organized into stable dataset folders with:
+
+```bash
+python scripts/prepare_report_assets.py
+```
+
+## GitHub Pages Setup
+
+To publish the documentation site with GitHub Pages:
+
+1. Go to **Settings → Pages** in the GitHub repository.
+2. Set **Source** to **Deploy from branch**.
+3. Set **Branch** to `main`.
+4. Set **Folder** to `/docs`.
+5. Click **Save**.
+
+GitHub will then provide the website URL after the Pages build finishes.
 
 ## CIFAR10 Presentation Quality
 
