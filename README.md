@@ -1,28 +1,25 @@
 # Image Reconstruction
 
-This project compares PCA and autoencoder-based methods for image
-reconstruction across MNIST, Fashion-MNIST, and CIFAR-10. PCA is the classical
-baseline handled by my teammate; this side focuses on regular autoencoders,
-denoising autoencoders, VAEs, latent interpolation/generation experiments, and
-a small diffusion extension for extra credit.
+CS 472 unsupervised learning final project comparing PCA and autoencoder-based image reconstruction on MNIST and Fashion-MNIST. PCA is teammate-owned work and final PCA figures/analysis will be merged later. This side of the repo contains AE, DAE, VAE, VAE interpolation/generation, and an extra-credit diffusion extension.
 
-The final project writeup lives at [`docs/index.md`](docs/index.md).
+The GitHub Pages writeup is in [`docs/index.md`](docs/index.md).
 
-## Code Layout
+## Project Layout
 
-- `autoencoders/`: AE, DAE, VAE models, train/eval loops, metrics, and
-  autoencoder-specific plots.
-- `diffusion/`: DDPM models, scheduler, sampler, diffusion train/eval loops,
-  and diffusion-specific image artifacts.
-- `train.py`: shared CLI that selects either the autoencoder package or the
-  diffusion package.
-- `configs/diffusion/`: MNIST and CIFAR10 diffusion recipes.
+```text
+autoencoders/              AE, DAE, VAE models, training, metrics, plots
+diffusion/                 Extra-credit DDPM code for MNIST and CIFAR-10
+configs/diffusion/         mnist.yaml and cifar10.yaml diffusion configs
+scripts/collect_report_assets.py
+docs/                      GitHub Pages site and small final image assets
+slurm/final_study/         Reproducible diffusion smoke/MNIST/CIFAR jobs
+train.py                   Main training entry point
+requirements.txt           Python dependencies
+```
 
-AE/DAE/VAE are the main learned reconstruction work. Diffusion is extra credit
-only, kept to MNIST and CIFAR10 after cleanup. Fashion-MNIST is still supported
-by the autoencoder CLI, but it is no longer part of the diffusion workflow.
+Generated folders such as `data/`, `outputs/`, `runs/`, `checkpoints/`, and `deliverables/` are ignored.
 
-## Autoencoder Commands
+## Autoencoder Runs
 
 Regular autoencoder:
 
@@ -42,72 +39,47 @@ Variational autoencoder:
 python train.py --model vae --dataset mnist --latent-dim 16
 ```
 
-Run all autoencoder variants on MNIST:
+Run all three learned reconstruction models:
 
 ```bash
 python train.py --models ae dae vae --dataset mnist --latent-dim 16
 ```
 
-Fashion-MNIST still works for the autoencoder side:
+Fashion-MNIST is supported for the autoencoder side:
 
 ```bash
 python train.py --model ae --dataset fashion --latent-dim 16
 ```
 
-## Diffusion Commands
-
-The cleaned diffusion path is intentionally small:
-
-- `mnist`: legacy diffusion, native `28x28`, `1` channel.
-- `cifar10`: ADM diffusion, native `32x32`, `3` channels.
-
-The old checkpoint-only FID/LPIPS/Inception evaluation path was removed. The
-diffusion deliverable is now simply: train the model, save the checkpoint,
-loss curve, reconstructions, reverse-process snapshots, and generated samples.
-
-Manual diffusion runs:
-
-```bash
-python train.py --config configs/diffusion/mnist.yaml --data-dir /scratch/$USER/image-reconstruction/data
-python train.py --config configs/diffusion/cifar10.yaml --data-dir /scratch/$USER/image-reconstruction/data
-```
-
-## Repository Structure
+Autoencoder outputs are written under:
 
 ```text
-.
-├── diffusion/              # DDPM model, scheduler, training, and sampling code
-├── autoencoders/           # AE/DAE/VAE model, training, metrics, and artifacts
-├── configs/diffusion/      # MNIST and CIFAR10 diffusion recipes
-├── slurm/final_study/      # Simple Slurm train arrays
-├── scripts/                # Utility scripts for reports and visualizations
-├── docs/                   # GitHub Pages project website
-├── train.py                # Main training entry point
-└── README.md
+outputs/<dataset>/<model>/<run_name>/
 ```
 
-## Diffusion Slurm Commands
+## Diffusion Extra Credit
 
-Smoke check:
+Diffusion is an extra-credit extension, not the main PCA vs autoencoder comparison. The active diffusion workflow is intentionally limited to:
+
+- MNIST: native `28x28`, grayscale, legacy U-Net config
+- CIFAR-10: native `32x32`, RGB, ADM-style U-Net config
+
+Fashion-MNIST diffusion and old checkpoint-only FID/LPIPS/Inception evaluation paths are not part of the cleaned workflow. A diffusion run trains the model and saves checkpoints, metrics, a loss curve, reconstructions, reverse-process snapshots, native sample grids, and generated samples.
+
+Run from configs:
 
 ```bash
-sbatch slurm/final_study/smoke_array.slurm
+python train.py --config configs/diffusion/mnist.yaml
+python train.py --config configs/diffusion/cifar10.yaml
 ```
 
-Final diffusion training:
-
-```bash
-sbatch slurm/final_study/train_mnist_array.slurm
-sbatch slurm/final_study/train_cifar10_array.slurm
-```
-
-The scripts write outputs under:
+Diffusion outputs are written under:
 
 ```text
-/scratch/$USER/image-reconstruction-final-study/runs/<dataset>/diffusion/<run_name>/
+outputs/<dataset>/diffusion/<run_name>/
 ```
 
-Each completed run should contain:
+Expected files include:
 
 ```text
 checkpoints/best.pt
@@ -116,25 +88,35 @@ plots/loss_curve.png
 plots/reconstructions.png
 plots/diffusion_snapshots.png
 samples/generated_samples.png
+samples/generated_samples_native_grid.png
 ```
 
-Rerun a failed or incomplete task with:
+## Slurm Diffusion Runs
+
+The small final-study Slurm surface is under `slurm/final_study/`:
 
 ```bash
-CLEAR_INCOMPLETE=1 sbatch --array=<task_id> slurm/final_study/train_mnist_array.slurm
-CLEAR_INCOMPLETE=1 sbatch --array=<task_id> slurm/final_study/train_cifar10_array.slurm
+sbatch slurm/final_study/smoke_array.slurm
+sbatch slurm/final_study/train_mnist_array.slurm
+sbatch slurm/final_study/train_cifar10_array.slurm
 ```
 
-Use `sbatch --constraint=h200`, `--constraint=v100`, or
-`--constraint=rtx6000` to switch GPU types.
+By default these write to:
+
+```text
+/scratch/$USER/image-reconstruction-final-study/runs/<dataset>/diffusion/<run_name>/
+```
 
 ## Report Assets
 
-Report assets for GitHub Pages can be copied into `docs/assets/` with:
+Copy small, final report images into `docs/assets/`:
 
 ```bash
 python scripts/collect_report_assets.py
 ```
 
-Diffusion should be reported separately from the PCA vs AE/DAE/VAE comparison.
-The main project remains reconstruction; diffusion is extra credit generation.
+The script creates PCA placeholders, collects AE/DAE/VAE figures when available, and prepares native plus nearest-neighbor-scaled MNIST/CIFAR diffusion sample grids for GitHub Pages.
+
+## PCA Status
+
+PCA results are intentionally placeholders for now. The final report still needs teammate PCA reconstruction grids, PCA metrics, and the final PCA vs AE conclusion section.

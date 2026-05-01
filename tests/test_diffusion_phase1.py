@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 
 import numpy as np
+import pytest
 import torch
 from PIL import Image
 from torch.optim import Adam
@@ -13,7 +14,12 @@ from diffusion.backbones.adm_unet import (
     default_attention_resolutions,
     default_channel_mults,
 )
-from diffusion.data import build_diffusion_transform, resolve_diffusion_data_config
+from diffusion.data import (
+    SUPPORTED_DIFFUSION_DATASET_CHOICES,
+    build_diffusion_transform,
+    normalize_dataset_name,
+    resolve_diffusion_data_config,
+)
 from diffusion.sampling import sample_images
 from diffusion.scheduler import (
     get_diffusion_target,
@@ -42,6 +48,15 @@ def test_resolve_diffusion_data_config_defaults() -> None:
     assert adm_config.channels == 3
     assert legacy_config.image_size == 28
     assert legacy_config.channels == 1
+
+
+def test_diffusion_dataset_choices_are_mnist_and_cifar10_only() -> None:
+    assert set(SUPPORTED_DIFFUSION_DATASET_CHOICES) == {"mnist", "cifar10", "cifar", "cifar-10", "cifar_10"}
+    assert normalize_dataset_name("cifar-10") == "cifar10"
+    with pytest.raises(ValueError):
+        normalize_dataset_name("fashion")
+    with pytest.raises(ValueError):
+        normalize_dataset_name("imagenet")
 
 
 def test_diffusion_transform_converts_mnist_to_rgb_64() -> None:

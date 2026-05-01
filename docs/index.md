@@ -4,158 +4,128 @@
 
 ## Overview
 
-This project compares PCA and autoencoder-based reconstruction methods. PCA is the classical dimensionality-reduction baseline, while autoencoders are the neural-network reconstruction approach.
+This CS 472 final project compares classical PCA reconstruction with neural autoencoder reconstruction on MNIST and Fashion-MNIST. PCA assets and the final cross-method analysis are owned by my teammate and will be merged later; this page currently shows the autoencoder-side results plus clear PCA placeholders.
 
-The main focus is reconstruction quality for PCA vs autoencoders. VAE, interpolation, denoising, and diffusion results are included to show related extensions. Diffusion is an extra-credit generative extension, not the main focus of the project.
-
-## Main Research Question
-
-How do PCA and autoencoder-based models compare for image reconstruction quality across MNIST and Fashion-MNIST?
-
-## Project Roles
-
-- **PCA analysis and visuals**: teammate
-- **Autoencoder, VAE/interpolation, denoising, and diffusion extension**: me
+My portion covers regular autoencoders, denoising autoencoders, variational autoencoders, VAE interpolation/generation, and a small diffusion extension. Diffusion is extra credit and is separate from the main PCA vs autoencoder comparison.
 
 ## Main Comparison: PCA vs Autoencoder
 
-This section is reserved for the final PCA vs AE comparison once teammate PCA results are merged.
+The final report will compare PCA and autoencoder reconstructions at matched compression levels using visual grids and metrics such as MSE, PSNR, and SSIM. The PCA visuals below are placeholders until teammate results are merged.
 
-### PCA Reconstruction Grids
+### PCA Placeholders
 
 ![PCA MNIST reconstruction placeholder](./assets/placeholders/pca_mnist_reconstructions_placeholder.png)
 
 ![PCA Fashion-MNIST reconstruction placeholder](./assets/placeholders/pca_fashion_reconstructions_placeholder.png)
 
-### AE Reconstruction Grids
+![PCA metrics placeholder](./assets/placeholders/pca_metrics_placeholder.png)
 
-![MNIST AE reconstruction grid](./assets/mnist/mnist_ae_recon_latent_16.png)
+### Current Autoencoder Reference Results
 
-![MNIST AE latent comparison](./assets/mnist/mnist_model_comparison_latent_16.png)
+![MNIST AE reconstruction grid](./assets/mnist/ae_reconstruction_latent16.png)
 
-### Combined PCA vs AE Grids
+![MNIST AE model comparison at latent dimension 16](./assets/mnist/model_comparison_latent16.png)
 
 ![Combined PCA vs AE placeholder](./assets/placeholders/pca_vs_ae_combined_grid_placeholder.png)
 
-### SSIM / PSNR / MSE Comparison Plots
+## AE / DAE / VAE Results
 
-![PCA metrics placeholder](./assets/placeholders/pca_metrics_placeholder.png)
+The regular autoencoder is the main neural reconstruction baseline against PCA. The denoising autoencoder tests robustness to noisy inputs, and the VAE adds a probabilistic latent space for sampling and interpolation.
 
-![MNIST metrics by model and latent dimension](./assets/mnist/mnist_metrics_vs_latent_by_model.png)
+### Regular Autoencoder
 
-## Autoencoder Results
+![MNIST AE reconstruction latent 16](./assets/mnist/ae_reconstruction_latent16.png)
 
-The regular autoencoder compresses each image into a lower-dimensional latent representation and reconstructs the image from that code. These results are the main neural-network comparison point against PCA.
+![MNIST AE latent space latent 16](./assets/mnist/ae_latent_space_latent16.png)
 
-![MNIST AE reconstruction latent 16](./assets/mnist/mnist_ae_recon_latent_16.png)
+![MNIST AE loss curve latent 16](./assets/mnist/ae_loss_latent16.png)
 
-![MNIST AE latent space 16](./assets/mnist/mnist_ae_latent_space_16.png)
+### Denoising Autoencoder
 
-![MNIST AE loss curve 16](./assets/mnist/mnist_ae_loss_curve_16.png)
+![MNIST DAE noisy reconstruction latent 16](./assets/mnist/dae_reconstruction_noise02_latent16.png)
 
-## VAE and Latent Space Results
+![MNIST DAE loss curve latent 16](./assets/mnist/dae_loss_noise02_latent16.png)
 
-The VAE extends the reconstruction model with a probabilistic latent space. This supports reconstruction, latent sampling, and interpolation between examples.
+### Variational Autoencoder
 
-![MNIST VAE reconstruction latent 16](./assets/mnist/mnist_vae_latent_16.png)
+![MNIST VAE reconstruction latent 16](./assets/mnist/vae_reconstruction_latent16.png)
 
-![MNIST VAE generated samples](./assets/mnist/vae_generated_mnist_latent_16.png)
+![MNIST VAE latent space latent 16](./assets/mnist/vae_latent_space_latent16.png)
 
-This interpolation uses visually different endpoints so the latent transition is easier to see.
+![MNIST VAE generated samples](./assets/mnist/vae_generated_latent16.png)
 
-![MNIST VAE interpolation with different endpoints](./assets/combined/vae_interpolation_better.png)
+## VAE Interpolation and Generation
 
-## Denoising Autoencoder / Noise Robustness
+The VAE latent space supports smooth movement between examples and random generation from the learned latent distribution.
 
-The denoising autoencoder tests whether the model can recover clean images from noisy inputs. This is useful for understanding robustness beyond direct reconstruction.
+![MNIST VAE interpolation](./assets/combined/vae_interpolation_latent16.png)
 
-![MNIST DAE noise reconstruction latent 16](./assets/mnist/mnist_dae_noise_0.2_latent_16.png)
+## Metrics Snapshot
 
-![MNIST DAE reconstruction latent 16](./assets/mnist/mnist_dae_recon_latent_16.png)
+The metric plots below summarize the current autoencoder-side results. PCA metric overlays will be added when teammate outputs are available.
 
-![MNIST DAE loss curve](./assets/mnist/mnist_dae_noise_0.2_loss_curve_16.png)
+![MNIST metrics by model and latent dimension](./assets/mnist/metrics_by_model_latent.png)
 
 ## Extra Credit Extension: Diffusion Model
 
-Diffusion was added after the main PCA vs AE reconstruction work. It focuses on generation rather than reconstruction.
+Diffusion is an extra-credit generative extension, not the main reconstruction comparison. The cleaned workflow keeps diffusion to MNIST and CIFAR-10 only. Fashion-MNIST diffusion runs were removed from the active workflow.
 
-MNIST generations are stronger because the dataset is grayscale, low resolution, and visually simple. CIFAR-10 is harder due to RGB channels, object complexity, backgrounds, and higher variation.
+The native grids preserve the original generated sample size. The enlarged grids are pre-scaled with nearest-neighbor interpolation so CIFAR-10 does not look blurred by browser or plotting interpolation.
 
-The 1x grid preserves the original 28x28 or 32x32 sample size. The enlarged version uses nearest-neighbor scaling so the images remain sharp instead of blurry.
+### MNIST Diffusion
 
-The diffusion model is intentionally lightweight, so imperfect CIFAR samples are expected.
+Native 28x28 samples:
 
-### MNIST Diffusion Generations
+<img src="./assets/diffusion/mnist_samples_native.png" class="pixelated native-grid" width="280" height="280" alt="MNIST diffusion samples at native 28x28 grid size">
 
-Actual-size grid:
+Nearest-neighbor 4x display:
 
-<img src="./assets/combined/mnist_diffusion_grid_1x.png" class="pixelated" alt="MNIST diffusion 1x grid">
+<img src="./assets/diffusion/mnist_samples_nearest_4x.png" class="pixelated" alt="MNIST diffusion samples enlarged with nearest-neighbor interpolation">
 
-Nearest-neighbor enlarged grid:
+### CIFAR-10 Diffusion
 
-<img src="./assets/combined/mnist_diffusion_grid_nearest_large.png" class="pixelated" alt="MNIST diffusion enlarged nearest-neighbor grid">
+Native 32x32 samples:
 
-### CIFAR-10 Diffusion Generations
+<img src="./assets/diffusion/cifar10_samples_native.png" class="pixelated native-grid" width="320" height="320" alt="CIFAR-10 diffusion samples at native 32x32 grid size">
 
-Actual-size grid:
+Nearest-neighbor 4x display:
 
-<img src="./assets/combined/cifar10_diffusion_grid_1x.png" class="pixelated" alt="CIFAR-10 diffusion 1x grid">
-
-Nearest-neighbor enlarged grid:
-
-<img src="./assets/combined/cifar10_diffusion_grid_nearest_large.png" class="pixelated" alt="CIFAR-10 diffusion enlarged nearest-neighbor grid">
-
-### Combined Diffusion Overview
-
-![Extra credit diffusion overview](./assets/combined/extra_credit_diffusion_overview.png)
-
-![CIFAR diffusion overview](./assets/combined/cifar_diffusion_overview.png)
+<img src="./assets/diffusion/cifar10_samples_nearest_4x.png" class="pixelated" alt="CIFAR-10 diffusion samples enlarged with nearest-neighbor interpolation">
 
 ## Full Analysis Placeholder
 
-Add the final written analysis here once PCA results are merged:
+The final written conclusions will be added after PCA results are merged:
 
-- PCA vs AE reconstruction quality
-- Metric trends by latent dimension
-- Strengths and weaknesses
-- Final conclusions
+- PCA vs AE reconstruction quality on MNIST and Fashion-MNIST
+- Metric trends by latent dimension or component count
+- Where PCA is competitive
+- Where AE/DAE/VAE models improve or fail
+- Final limitations and recommendations
 
-The final PCA vs AE analysis will be completed once the PCA images and metrics are merged.
+## How To Reproduce
 
-## Limitations
-
-- PCA results are pending from the teammate.
-- The fully connected AE is limited on complex RGB data.
-- CIFAR needs CNNs or larger models for better reconstruction and generation.
-- Diffusion needs more compute and a larger architecture for stronger results.
-
-## Future Work
-
-- Merge PCA results.
-- Create final PCA vs AE comparison grids.
-- Add a CNN autoencoder for CIFAR.
-- Improve diffusion with a larger UNet, attention, cosine noise schedule, EMA, and Monsoon GPU sweeps.
-
-## How to Run
-
-The repo supports AE, DAE, VAE, and diffusion runs through `train.py`. These examples use CLI arguments that already exist in the repo.
+Autoencoder examples:
 
 ```bash
-# Regular autoencoder
 python train.py --model ae --dataset mnist --latent-dim 16
-
-# Denoising autoencoder
 python train.py --model dae --dataset mnist --latent-dim 16 --dae-noise-level 0.2
-
-# Variational autoencoder
 python train.py --model vae --dataset mnist --latent-dim 16
+```
 
-# Diffusion extension with existing configs
+Fashion-MNIST is supported for the autoencoder side:
+
+```bash
+python train.py --model ae --dataset fashion --latent-dim 16
+```
+
+Diffusion extra-credit configs:
+
+```bash
 python train.py --config configs/diffusion/mnist.yaml
 python train.py --config configs/diffusion/cifar10.yaml
 ```
 
-Collect copied report assets and regenerate placeholders/grids:
+Collect small report images into `docs/assets/`:
 
 ```bash
 python scripts/collect_report_assets.py

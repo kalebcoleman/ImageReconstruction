@@ -6,17 +6,26 @@
 venv/
 __pycache__/
 **/__pycache__/
-outputs/
+*.py[cod]
+
+# Local data, runs, and generated artifacts
 data/
+datasets/
+outputs/
+runs/
+checkpoints/
+wandb/
+deliverables/
+image-reconstruction-final-study/
+
+# Legacy/generated report folders
 logs/
 results/
 archived_experiments/
 slurm/final_study/logs/
-deliverables/image-reconstruction-final-study/runs/
-deliverables/image-reconstruction-final-study/summaries/
-deliverables/image-reconstruction-final-study/deliverables/
-deliverables/image-reconstruction-final-study/study_registry.*
 *.out
 *.err
-*.py[cod]
+*.pt
+*.pth
+*.ckpt
 .DS_Store

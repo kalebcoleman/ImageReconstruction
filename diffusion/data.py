@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import math
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -19,13 +18,7 @@ class DatasetSpec:
     num_classes: int
     native_image_size: int
     native_channels: int
-    train_split: str = "train"
-    eval_split: str = "test"
     supports_download: bool = True
-    storage_subdir: str | None = None
-
-    def split_name(self, train: bool) -> str:
-        return self.train_split if train else self.eval_split
 
 
 DATASET_SPECS: dict[str, DatasetSpec] = {
@@ -44,17 +37,6 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         num_classes=10,
         native_image_size=32,
         native_channels=3,
-    ),
-    "imagenet": DatasetSpec(
-        name="imagenet",
-        aliases=("imagenet", "ilsvrc", "ilsvrc2012"),
-        dataset_class=None,
-        num_classes=1000,
-        native_image_size=224,
-        native_channels=3,
-        eval_split="val",
-        supports_download=False,
-        storage_subdir="imagenet",
     ),
 }
 
@@ -139,34 +121,14 @@ def build_diffusion_transform(
             f"Expected one of {SUPPORTED_PREPROCESSING_PROTOCOLS}."
         )
 
-    if spec.name == "imagenet":
-        if train:
-            steps.extend(
-                [
-                    transforms.RandomResizedCrop(
-                        image_size,
-                        interpolation=InterpolationMode.BILINEAR,
-                    ),
-                    transforms.RandomHorizontalFlip(),
-                ]
-            )
-        else:
-            resize_size = max(image_size, math.ceil(image_size * 1.125))
-            steps.extend(
-                [
-                    transforms.Resize(resize_size, interpolation=InterpolationMode.BILINEAR),
-                    transforms.CenterCrop(image_size),
-                ]
-            )
-    else:
-        steps.append(
-            transforms.Resize(
-                (image_size, image_size),
-                interpolation=InterpolationMode.BILINEAR,
-            )
+    steps.append(
+        transforms.Resize(
+            (image_size, image_size),
+            interpolation=InterpolationMode.BILINEAR,
         )
-        if train and spec.name in {"cifar10"}:
-            steps.append(transforms.RandomHorizontalFlip())
+    )
+    if train and spec.name == "cifar10":
+        steps.append(transforms.RandomHorizontalFlip())
 
     if spec.native_channels != channels:
         steps.append(transforms.Grayscale(num_output_channels=channels))
@@ -206,14 +168,10 @@ def describe_diffusion_preprocessing(
         },
     }
 
-    if spec.name == "imagenet":
-        train_ops = [f"random_resized_crop({image_size})", "random_horizontal_flip"]
-        eval_ops = [f"resize({max(image_size, math.ceil(image_size * 1.125))})", f"center_crop({image_size})"]
-    else:
-        train_ops = [f"resize({image_size}x{image_size})"]
-        if spec.name == "cifar10":
-            train_ops.append("random_horizontal_flip")
-        eval_ops = [f"resize({image_size}x{image_size})"]
+    train_ops = [f"resize({image_size}x{image_size})"]
+    if spec.name == "cifar10":
+        train_ops.append("random_horizontal_flip")
+    eval_ops = [f"resize({image_size}x{image_size})"]
     base_description["deterministic_train_preprocessing"] = False
 
     base_description["train_ops"] = train_ops
@@ -243,22 +201,7 @@ def build_diffusion_dataset(
         preprocessing_protocol=preprocessing_protocol,
     )
 
-    if spec.name == "imagenet":
-        if download:
-            raise ValueError(
-                "ImageNet download is not supported. Prepare "
-                f"{(dataset_root / (spec.storage_subdir or spec.name)).resolve()} "
-                "with train/ and val/ subdirectories."
-            )
-        split_dir = dataset_root / (spec.storage_subdir or spec.name) / spec.split_name(train)
-        if not split_dir.exists():
-            raise FileNotFoundError(
-                "ImageNet data was not found. Expected a directory like "
-                f"{split_dir.resolve()} containing class subdirectories."
-            )
-        return datasets.ImageFolder(root=str(split_dir), transform=transform)
-
-    if spec.dataset_class is None:  # pragma: no cover - guarded by the ImageNet branch above.
+    if spec.dataset_class is None:  # pragma: no cover - guarded by dataset registration.
         raise ValueError(f"No dataset class registered for {spec.name}.")
 
     if download and spec.supports_download:

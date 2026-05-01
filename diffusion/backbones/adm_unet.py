@@ -224,7 +224,7 @@ def default_attention_resolutions(image_size: int, dataset_name: str) -> tuple[i
     """Return low-resolution attention placements for the selected run."""
 
     resolutions = []
-    if image_size >= 128 or (dataset_name == "imagenet" and image_size >= 64):
+    if image_size >= 128:
         resolutions.append(32)
     if image_size >= 64:
         resolutions.extend([16, 8])

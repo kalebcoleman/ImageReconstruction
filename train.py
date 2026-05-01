@@ -727,13 +727,6 @@ def dataset_missing_error(dataset_name: str, data_dir: Path, *, diffusion: bool)
         if diffusion
         else resolve_autoencoder_dataset_spec(dataset_name)
     )
-    if dataset_spec.name == "imagenet":
-        imagenet_root = data_dir / (dataset_spec.storage_subdir or dataset_spec.name)
-        return FileNotFoundError(
-            "ImageNet was not found under "
-            f"{imagenet_root.resolve()}. Prepare train/ and val/ subdirectories "
-            "before launching diffusion jobs."
-        )
     return FileNotFoundError(
         f"{dataset_name.upper()} was not found under {data_dir.resolve()}. "
         "Pre-download the dataset on a login node or rerun with --download."
@@ -774,8 +767,6 @@ def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> 
         message = str(exc).lower()
         if not config.download and ("dataset not found" in message or "not found" in message):
             raise dataset_missing_error(dataset_key, data_dir, diffusion=is_diffusion(config.model)) from exc
-        if dataset_key == "imagenet" and isinstance(exc, FileNotFoundError):
-            raise dataset_missing_error(dataset_key, data_dir, diffusion=True) from exc
         raise
 
     DATASET_CACHE[cache_key] = dataset

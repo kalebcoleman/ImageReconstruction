@@ -1,2 +1,0 @@
-dataset,model,mean_loss,std_loss,psnr,ssim,parameters,seed
-mnist,diffusion,0.029214245326156858,0.0,16.21542849467812,0.6345726017710529,7891073,2

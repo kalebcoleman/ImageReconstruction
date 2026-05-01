@@ -21,9 +21,8 @@ Design summary:
 
 - MNIST stays grayscale and native-size.
 - CIFAR10 stays native `32x32` RGB.
-- Fashion-MNIST is still available to the older AE/DAE/VAE code paths through
-  `train.py`, but it is no longer a diffusion final-study target.
-- ImageNet is not part of the default final study.
+- Fashion-MNIST is still available to the AE/DAE/VAE code paths through
+  `train.py`, but it is not a diffusion target in this repo.
 - The old strict `64x64` RGB comparison configs were removed from the default
   repo workflow during cleanup.
 
