@@ -37,14 +37,6 @@ DATASET_SPECS: dict[str, DatasetSpec] = {
         native_image_size=28,
         native_channels=1,
     ),
-    "fashion": DatasetSpec(
-        name="fashion",
-        aliases=("fashion", "fashion-mnist", "fashion_mnist"),
-        dataset_class=datasets.FashionMNIST,
-        num_classes=10,
-        native_image_size=28,
-        native_channels=1,
-    ),
     "cifar10": DatasetSpec(
         name="cifar10",
         aliases=("cifar10", "cifar", "cifar-10", "cifar_10"),
@@ -71,8 +63,8 @@ DATASET_ALIASES: dict[str, str] = {
     for spec in DATASET_SPECS.values()
     for alias in spec.aliases
 }
-SUPPORTED_DATASET_CHOICES: tuple[str, ...] = tuple(DATASET_ALIASES)
-SUPPORTED_PREPROCESSING_PROTOCOLS: tuple[str, ...] = ("default", "parity_64")
+SUPPORTED_DIFFUSION_DATASET_CHOICES: tuple[str, ...] = tuple(DATASET_ALIASES)
+SUPPORTED_PREPROCESSING_PROTOCOLS: tuple[str, ...] = ("default",)
 
 
 @dataclass(frozen=True)
@@ -147,8 +139,18 @@ def build_diffusion_transform(
             f"Expected one of {SUPPORTED_PREPROCESSING_PROTOCOLS}."
         )
 
-    if preprocessing_protocol == "parity_64":
-        if spec.name == "imagenet":
+    if spec.name == "imagenet":
+        if train:
+            steps.extend(
+                [
+                    transforms.RandomResizedCrop(
+                        image_size,
+                        interpolation=InterpolationMode.BILINEAR,
+                    ),
+                    transforms.RandomHorizontalFlip(),
+                ]
+            )
+        else:
             resize_size = max(image_size, math.ceil(image_size * 1.125))
             steps.extend(
                 [
@@ -156,42 +158,15 @@ def build_diffusion_transform(
                     transforms.CenterCrop(image_size),
                 ]
             )
-        else:
-            steps.append(
-                transforms.Resize(
-                    (image_size, image_size),
-                    interpolation=InterpolationMode.BILINEAR,
-                )
-            )
     else:
-        if spec.name == "imagenet":
-            if train:
-                steps.extend(
-                    [
-                        transforms.RandomResizedCrop(
-                            image_size,
-                            interpolation=InterpolationMode.BILINEAR,
-                        ),
-                        transforms.RandomHorizontalFlip(),
-                    ]
-                )
-            else:
-                resize_size = max(image_size, math.ceil(image_size * 1.125))
-                steps.extend(
-                    [
-                        transforms.Resize(resize_size, interpolation=InterpolationMode.BILINEAR),
-                        transforms.CenterCrop(image_size),
-                    ]
-                )
-        else:
-            steps.append(
-                transforms.Resize(
-                    (image_size, image_size),
-                    interpolation=InterpolationMode.BILINEAR,
-                )
+        steps.append(
+            transforms.Resize(
+                (image_size, image_size),
+                interpolation=InterpolationMode.BILINEAR,
             )
-            if train and spec.name in {"cifar10"}:
-                steps.append(transforms.RandomHorizontalFlip())
+        )
+        if train and spec.name in {"cifar10"}:
+            steps.append(transforms.RandomHorizontalFlip())
 
     if spec.native_channels != channels:
         steps.append(transforms.Grayscale(num_output_channels=channels))
@@ -231,72 +206,42 @@ def describe_diffusion_preprocessing(
         },
     }
 
-    if preprocessing_protocol == "parity_64":
-        if spec.name == "imagenet":
-            train_ops = [
-                f"resize({max(image_size, math.ceil(image_size * 1.125))})",
-                f"center_crop({image_size})",
-            ]
-        else:
-            train_ops = [f"resize({image_size}x{image_size})"]
-        eval_ops = list(train_ops)
-        base_description["deterministic_train_preprocessing"] = True
+    if spec.name == "imagenet":
+        train_ops = [f"random_resized_crop({image_size})", "random_horizontal_flip"]
+        eval_ops = [f"resize({max(image_size, math.ceil(image_size * 1.125))})", f"center_crop({image_size})"]
     else:
-        if spec.name == "imagenet":
-            train_ops = [f"random_resized_crop({image_size})", "random_horizontal_flip"]
-            eval_ops = [f"resize({max(image_size, math.ceil(image_size * 1.125))})", f"center_crop({image_size})"]
-        else:
-            train_ops = [f"resize({image_size}x{image_size})"]
-            if spec.name == "cifar10":
-                train_ops.append("random_horizontal_flip")
-            eval_ops = [f"resize({image_size}x{image_size})"]
-        base_description["deterministic_train_preprocessing"] = False
+        train_ops = [f"resize({image_size}x{image_size})"]
+        if spec.name == "cifar10":
+            train_ops.append("random_horizontal_flip")
+        eval_ops = [f"resize({image_size}x{image_size})"]
+    base_description["deterministic_train_preprocessing"] = False
 
     base_description["train_ops"] = train_ops
     base_description["eval_ops"] = eval_ops
     return base_description
 
 
-def build_standard_transform(dataset_name: str) -> transforms.Compose:
-    """Return the unchanged AE/DAE/VAE preprocessing pipeline."""
-
-    spec = resolve_dataset_spec(dataset_name)
-    if spec.native_channels != 1 or spec.native_image_size != 28:
-        raise ValueError(
-            f"{spec.name} is only supported for diffusion in the current repo. "
-            "AE/DAE/VAE remain MNIST-style paths for now."
-        )
-    return transforms.Compose([transforms.ToTensor()])
-
-
-def build_dataset(
+def build_diffusion_dataset(
     dataset_name: str,
     *,
     root: Path,
     train: bool,
-    diffusion: bool,
-    image_size: int | None = None,
-    channels: int | None = None,
+    image_size: int,
+    channels: int,
     preprocessing_protocol: str = "default",
     download: bool = False,
 ) -> Dataset:
-    """Instantiate a dataset with the correct split and transform adapter."""
+    """Instantiate a dataset with the diffusion transform adapter."""
 
     spec = resolve_dataset_spec(dataset_name)
     dataset_root = Path(root)
-
-    if diffusion:
-        if image_size is None or channels is None:
-            raise ValueError("Diffusion datasets require an explicit image_size and channels.")
-        transform = build_diffusion_transform(
-            spec.name,
-            train=train,
-            image_size=image_size,
-            channels=channels,
-            preprocessing_protocol=preprocessing_protocol,
-        )
-    else:
-        transform = build_standard_transform(spec.name)
+    transform = build_diffusion_transform(
+        spec.name,
+        train=train,
+        image_size=image_size,
+        channels=channels,
+        preprocessing_protocol=preprocessing_protocol,
+    )
 
     if spec.name == "imagenet":
         if download:

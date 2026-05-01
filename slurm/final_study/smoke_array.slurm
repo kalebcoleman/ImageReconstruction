@@ -6,7 +6,7 @@
 #SBATCH --time=02:00:00
 #SBATCH --cpus-per-task=4
 #SBATCH --mem=32G
-#SBATCH --array=0-2
+#SBATCH --array=0-1
 #SBATCH --output=slurm/final_study/logs/%x_%A_%a.out
 #SBATCH --error=slurm/final_study/logs/%x_%A_%a.err
 
@@ -24,7 +24,7 @@ source "${COMMON_SH}"
 
 CURRENT_USER="${USER:-$(id -un)}"
 final_study_set_defaults "/scratch/${CURRENT_USER}/image-reconstruction-final-study-smoke-all"
-: "${DATASETS:=mnist fashion cifar10}"
+: "${DATASETS:=mnist cifar10}"
 : "${SMOKE_SEED:=1}"
 
 DATASET_WORDS="$(final_study_normalize_words "${DATASETS}")"
@@ -35,28 +35,38 @@ if (( TASK_ID < 0 || TASK_ID >= ${#DATASET_ARRAY[@]} )); then
   exit 2
 fi
 DATASET="${DATASET_ARRAY[$TASK_ID]}"
+RUN_NAME="smoke_${DATASET}_seed$(printf "%03d" "${SMOKE_SEED}")"
+RUN_DIR="${STUDY_DIR}/runs/${DATASET}/diffusion/${RUN_NAME}"
 
 final_study_prepare_runtime
 final_study_print_context "smoke-train"
 echo "Dataset: ${DATASET}"
 echo "Seed: ${SMOKE_SEED}"
+echo "Run: ${RUN_NAME}"
+
+if [[ -f "${RUN_DIR}/checkpoints/best.pt" && -f "${RUN_DIR}/metrics.json" ]]; then
+  echo "Completed smoke run already exists: ${RUN_DIR}"
+  exit 0
+fi
+if [[ -d "${RUN_DIR}" && "${CLEAR_INCOMPLETE}" == "1" ]]; then
+  echo "Removing incomplete smoke run: ${RUN_DIR}"
+  rm -rf "${RUN_DIR}"
+elif [[ -d "${RUN_DIR}" ]]; then
+  echo "Incomplete smoke run exists: ${RUN_DIR}" >&2
+  echo "Set CLEAR_INCOMPLETE=1 to delete it before rerunning." >&2
+  exit 1
+fi
 
 final_study_activate_conda
 final_study_cd_repo
 
 COMMAND=(
-  "${PYTHON_BIN}" run_parity_suite.py run
-  --smoke
-  --study-dir "${STUDY_DIR}"
+  "${PYTHON_BIN}" train.py
+  --config "configs/diffusion/smoke/${DATASET}.yaml"
+  --seed "${SMOKE_SEED}"
+  --run-name "${RUN_NAME}"
   --data-dir "${DATA_DIR}"
-  --datasets "${DATASET}"
-  --seeds "${SMOKE_SEED}"
-  --phase train
-  --skip-existing
-  --no-summarize
+  --output-dir "${STUDY_DIR}/runs"
 )
-if [[ "${CLEAR_INCOMPLETE}" == "1" ]]; then
-  COMMAND+=(--clear-incomplete)
-fi
 
 final_study_run_command "${COMMAND[@]}"

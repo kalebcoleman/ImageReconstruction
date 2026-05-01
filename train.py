@@ -22,33 +22,49 @@ MPL_CACHE_DIR.mkdir(parents=True, exist_ok=True)
 os.environ.setdefault("MPLCONFIGDIR", str(MPL_CACHE_DIR))
 os.environ.setdefault("XDG_CACHE_HOME", str(MPL_CACHE_DIR))
 
-import matplotlib
 import numpy as np
-from PIL import Image
 import torch
 import torch.backends.cudnn as cudnn
 import torch.nn as nn
-from sklearn.decomposition import PCA
 from sklearn.model_selection import KFold
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset, Subset
 
-try:
-    from torchmetrics.image import StructuralSimilarityIndexMeasure
-except ModuleNotFoundError:
-    StructuralSimilarityIndexMeasure = None
-
+from autoencoders import (
+    FullyConnectedAutoencoder,
+    SUPPORTED_AUTOENCODER_DATASET_CHOICES,
+    VariationalAutoencoder,
+    build_autoencoder_dataset,
+    eval_epoch,
+    evaluate_metrics,
+    generate_samples,
+    interpolate_images,
+    is_denoising,
+    is_vae_model,
+    normalize_autoencoder_dataset_name,
+    plot_latent_space,
+    resolve_autoencoder_dataset_spec,
+    show_reconstructions,
+    train_epoch,
+)
+from diffusion.artifacts import (
+    plot_diffusion_reconstructions,
+    plot_diffusion_snapshots,
+    plot_image_grid,
+    plot_loss_curves,
+    save_native_image_grid,
+)
 from diffusion.backbones.adm_unet import (
     ADMUNet,
     default_attention_resolutions,
     default_channel_mults,
 )
 from diffusion.data import (
-    SUPPORTED_DATASET_CHOICES,
-    build_dataset,
+    SUPPORTED_DIFFUSION_DATASET_CHOICES,
+    build_diffusion_dataset,
     describe_diffusion_preprocessing,
-    normalize_dataset_name as canonicalize_dataset_name,
-    resolve_dataset_spec,
+    normalize_dataset_name as normalize_diffusion_dataset_name,
+    resolve_dataset_spec as resolve_diffusion_dataset_spec,
     resolve_diffusion_data_config,
 )
 from diffusion.ema import create_ema_model, select_eval_model
@@ -57,25 +73,21 @@ from diffusion.recipes import apply_recipe_to_namespace
 from diffusion.reporting import save_manifest_bundle, save_yaml
 from diffusion.runtime import create_grad_scaler, format_resolved_amp_dtype
 from diffusion.sampling import sample_images
-from diffusion.scheduler import get_noise_schedule, predict_x0_from_model_output, q_sample
+from diffusion.scheduler import get_noise_schedule
 from diffusion.training import (
-    _compute_batch_ssim,
     eval_diffusion_epoch,
     evaluate_diffusion_metrics,
     train_diffusion_epoch,
 )
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
 
 
 LOGGER = logging.getLogger("image_reconstruction")
 CRITERION = nn.MSELoss()
 DATASET_CACHE: dict[tuple[str, bool, str, bool, str], Dataset] = {}
 SUPPORTED_MODELS = ("ae", "dae", "vae", "diffusion")
-DEFAULT_IMAGE_INTERPOLATION = "nearest"
-AUTO_IMAGE_INTERPOLATION = "auto"
-LOW_RES_PRESENTATION_MAX_SIZE = 32
+SUPPORTED_DATASET_CHOICES = tuple(
+    dict.fromkeys((*SUPPORTED_AUTOENCODER_DATASET_CHOICES, *SUPPORTED_DIFFUSION_DATASET_CHOICES))
+)
 
 
 @dataclass(frozen=True)
@@ -207,9 +219,9 @@ def build_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--diffusion-preprocessing",
         dest="diffusion_preprocessing",
-        choices=("default", "parity_64"),
+        choices=("default",),
         default=ExperimentConfig.diffusion_preprocessing,
-        help="Dataset transform protocol for diffusion. 'default' preserves the current dataset-specific behavior; 'parity_64' locks the fair-comparison protocol.",
+        help="Dataset transform protocol for diffusion.",
     )
     parser.add_argument(
         "--download",
@@ -410,7 +422,10 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
 
 
 def normalize_dataset_name(dataset_name: str) -> str:
-    return canonicalize_dataset_name(dataset_name)
+    try:
+        return normalize_autoencoder_dataset_name(dataset_name)
+    except ValueError:
+        return normalize_diffusion_dataset_name(dataset_name)
 
 
 def resolve_selected_models(args: argparse.Namespace) -> list[str]:
@@ -480,10 +495,8 @@ def build_base_config(args: argparse.Namespace) -> ExperimentConfig:
 
 
 def build_run_config(base_config: ExperimentConfig, dataset_name: str, model_name: str) -> ExperimentConfig:
-    dataset_spec = resolve_dataset_spec(dataset_name)
-    resolved_image_size = dataset_spec.native_image_size
-    resolved_channels = dataset_spec.native_channels
     if is_diffusion(model_name):
+        dataset_spec = resolve_diffusion_dataset_spec(dataset_name)
         resolved = resolve_diffusion_data_config(
             dataset_name,
             diffusion_backbone=base_config.diffusion_backbone,
@@ -492,11 +505,10 @@ def build_run_config(base_config: ExperimentConfig, dataset_name: str, model_nam
         )
         resolved_image_size = resolved.image_size
         resolved_channels = resolved.channels
-    elif dataset_spec.native_channels != 1 or dataset_spec.native_image_size != 28:
-        raise ValueError(
-            f"{dataset_spec.name} is only supported for diffusion right now. "
-            "Use --model diffusion for CIFAR10/ImageNet runs."
-        )
+    else:
+        dataset_spec = resolve_autoencoder_dataset_spec(dataset_name)
+        resolved_image_size = dataset_spec.native_image_size
+        resolved_channels = dataset_spec.native_channels
 
     return ExperimentConfig(
         **{
@@ -709,8 +721,12 @@ def seed_everything(seed: int) -> None:
     cudnn.benchmark = False
 
 
-def dataset_missing_error(dataset_name: str, data_dir: Path) -> FileNotFoundError:
-    dataset_spec = resolve_dataset_spec(dataset_name)
+def dataset_missing_error(dataset_name: str, data_dir: Path, *, diffusion: bool) -> FileNotFoundError:
+    dataset_spec = (
+        resolve_diffusion_dataset_spec(dataset_name)
+        if diffusion
+        else resolve_autoencoder_dataset_spec(dataset_name)
+    )
     if dataset_spec.name == "imagenet":
         imagenet_root = data_dir / (dataset_spec.storage_subdir or dataset_spec.name)
         return FileNotFoundError(
@@ -737,22 +753,29 @@ def get_dataset(config: ExperimentConfig, dataset_name: str, *, train: bool) -> 
         return DATASET_CACHE[cache_key]
 
     try:
-        dataset = build_dataset(
-            dataset_key,
-            root=data_dir,
-            train=train,
-            diffusion=is_diffusion(config.model),
-            image_size=config.image_size if is_diffusion(config.model) else None,
-            channels=config.diffusion_channels if is_diffusion(config.model) else None,
-            preprocessing_protocol=config.diffusion_preprocessing if is_diffusion(config.model) else "default",
-            download=config.download,
-        )
+        if is_diffusion(config.model):
+            dataset = build_diffusion_dataset(
+                dataset_key,
+                root=data_dir,
+                train=train,
+                image_size=config.image_size,
+                channels=config.diffusion_channels,
+                preprocessing_protocol=config.diffusion_preprocessing,
+                download=config.download,
+            )
+        else:
+            dataset = build_autoencoder_dataset(
+                dataset_key,
+                root=data_dir,
+                train=train,
+                download=config.download,
+            )
     except (FileNotFoundError, RuntimeError) as exc:
         message = str(exc).lower()
         if not config.download and ("dataset not found" in message or "not found" in message):
-            raise dataset_missing_error(dataset_key, data_dir) from exc
+            raise dataset_missing_error(dataset_key, data_dir, diffusion=is_diffusion(config.model)) from exc
         if dataset_key == "imagenet" and isinstance(exc, FileNotFoundError):
-            raise dataset_missing_error(dataset_key, data_dir) from exc
+            raise dataset_missing_error(dataset_key, data_dir, diffusion=True) from exc
         raise
 
     DATASET_CACHE[cache_key] = dataset
@@ -782,19 +805,6 @@ def build_experiment_splits(dataset_size: int, config: ExperimentConfig) -> list
     ]
 
 
-def compute_psnr(mse: float) -> float:
-    mse = max(mse, 1e-12)
-    return 10.0 * math.log10(1.0 / mse)
-
-
-def is_denoising(model_type: str) -> bool:
-    return model_type == "dae"
-
-
-def is_vae_model(model_type: str) -> bool:
-    return model_type == "vae"
-
-
 def is_diffusion(model_type: str) -> bool:
     return model_type == "diffusion"
 
@@ -814,654 +824,6 @@ def mean_metric(values: list[float]) -> float:
     if not finite_values:
         return float("nan")
     return float(np.mean(finite_values))
-
-
-class FullyConnectedAutoencoder(nn.Module):
-    def __init__(self, latent_dim: int) -> None:
-        super().__init__()
-        self.encoder = nn.Sequential(
-            nn.Flatten(),
-            nn.Linear(28 * 28, 128),
-            nn.ReLU(),
-            nn.Linear(128, latent_dim),
-        )
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, 128),
-            nn.ReLU(),
-            nn.Linear(128, 28 * 28),
-            nn.Sigmoid(),
-        )
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        return self.encoder(x)
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        decoded = self.decoder(latent)
-        return decoded.view(-1, 1, 28, 28)
-
-    def forward(self, inputs: torch.Tensor) -> torch.Tensor:
-        latent = self.encode(inputs)
-        return self.decode(latent)
-
-
-class VariationalAutoencoder(nn.Module):
-    def __init__(self, latent_dim: int) -> None:
-        super().__init__()
-        hidden_dim = 400
-        self.flatten = nn.Flatten()
-        self.encoder = nn.Sequential(
-            nn.Linear(28 * 28, hidden_dim),
-            nn.ReLU(),
-        )
-        self.mu = nn.Linear(hidden_dim, latent_dim)
-        self.logvar = nn.Linear(hidden_dim, latent_dim)
-        self.decoder = nn.Sequential(
-            nn.Linear(latent_dim, hidden_dim),
-            nn.ReLU(),
-            nn.Linear(hidden_dim, 28 * 28),
-            nn.Sigmoid(),
-        )
-
-    def encode_features(self, x: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
-        hidden = self.encoder(self.flatten(x))
-        return self.mu(hidden), self.logvar(hidden)
-
-    def reparameterize(self, mu: torch.Tensor, logvar: torch.Tensor) -> torch.Tensor:
-        std = torch.exp(0.5 * logvar)
-        epsilon = torch.randn_like(std)
-        return mu + std * epsilon
-
-    def encode(self, x: torch.Tensor) -> torch.Tensor:
-        mu, _ = self.encode_features(x)
-        return mu
-
-    def decode(self, latent: torch.Tensor) -> torch.Tensor:
-        decoded = self.decoder(latent)
-        return decoded.view(-1, 1, 28, 28)
-
-    def reconstruct(self, x: torch.Tensor) -> torch.Tensor:
-        mu, _ = self.encode_features(x)
-        return self.decode(mu)
-
-    def forward(self, inputs: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-        mu, logvar = self.encode_features(inputs)
-        latent = self.reparameterize(mu, logvar)
-        reconstructed = self.decode(latent)
-        return reconstructed, mu, logvar
-
-
-def inject_noise(clean_images: torch.Tensor, noise_level: float) -> torch.Tensor:
-    noisy_images = clean_images + noise_level * torch.randn_like(clean_images)
-    return torch.clamp(noisy_images, 0.0, 1.0)
-
-
-def compute_vae_loss(
-    reconstructed_images: torch.Tensor,
-    clean_images: torch.Tensor,
-    mu: torch.Tensor,
-    logvar: torch.Tensor,
-    criterion: nn.Module,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    del criterion
-    batch_size = clean_images.shape[0]
-    recon_loss = nn.functional.binary_cross_entropy(
-        reconstructed_images,
-        clean_images,
-        reduction="sum",
-    ) / batch_size
-    kl_loss = -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1).mean()
-    return recon_loss + kl_loss, recon_loss
-
-
-def run_forward_pass(
-    model: nn.Module,
-    inputs: torch.Tensor,
-    clean_images: torch.Tensor,
-    criterion: nn.Module,
-    model_type: str,
-) -> tuple[torch.Tensor, torch.Tensor]:
-    if is_vae_model(model_type):
-        reconstructed_images, mu, logvar = model(inputs)
-        loss, _ = compute_vae_loss(reconstructed_images, clean_images, mu, logvar, criterion)
-    elif model_type in ("ae", "dae"):
-        reconstructed_images = model(inputs)
-        loss = criterion(reconstructed_images, clean_images)
-    else:
-        raise NotImplementedError(f"Forward pass for {model_type} not implemented.")
-    return loss, reconstructed_images
-
-
-def train_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    optimizer: Adam,
-    criterion: nn.Module,
-    device: torch.device,
-    *,
-    model_type: str,
-    noise_level: float,
-) -> float:
-    model.train()
-    running_loss = 0.0
-
-    for clean_images, _ in loader:
-        clean_images = clean_images.to(device, non_blocking=True)
-        inputs = inject_noise(clean_images, noise_level) if is_denoising(model_type) else clean_images
-        optimizer.zero_grad(set_to_none=True)
-        loss, _ = run_forward_pass(model, inputs, clean_images, criterion, model_type)
-        loss.backward()
-        optimizer.step()
-        running_loss += loss.item()
-
-    return running_loss / max(len(loader), 1)
-
-
-def eval_epoch(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    *,
-    model_type: str,
-    noise_level: float,
-) -> float:
-    model.eval()
-    running_loss = 0.0
-    with torch.no_grad():
-        for clean_images, _ in loader:
-            clean_images = clean_images.to(device, non_blocking=True)
-            inputs = inject_noise(clean_images, noise_level) if is_denoising(model_type) else clean_images
-            loss, _ = run_forward_pass(model, inputs, clean_images, criterion, model_type)
-            running_loss += loss.item()
-
-    return running_loss / max(len(loader), 1)
-
-
-def evaluate_metrics(
-    model: nn.Module,
-    loader: DataLoader,
-    criterion: nn.Module,
-    device: torch.device,
-    *,
-    model_type: str,
-) -> dict[str, float]:
-    model.eval()
-    mse_total = 0.0
-    ssim_total = 0.0
-    num_batches = 0
-    ssim_metric = None
-    if StructuralSimilarityIndexMeasure is not None:
-        ssim_metric = StructuralSimilarityIndexMeasure(data_range=1.0).to(device)
-
-    with torch.no_grad():
-        for clean_images, _ in loader:
-            clean_images = clean_images.to(device, non_blocking=True)
-            if is_vae_model(model_type):
-                reconstructed_images = model.reconstruct(clean_images)
-            elif model_type in ("ae", "dae"):
-                reconstructed_images = model(clean_images)
-            else:
-                raise NotImplementedError(f"Metrics not supported for {model_type}.")
-
-            mse_total += criterion(reconstructed_images, clean_images).item()
-            if ssim_metric is not None:
-                ssim_total += ssim_metric(reconstructed_images, clean_images).item()
-                ssim_metric.reset()
-            else:
-                ssim_total += _compute_batch_ssim(reconstructed_images, clean_images)
-            num_batches += 1
-
-    mse = mse_total / max(num_batches, 1)
-    return {
-        "mse": mse,
-        "psnr": compute_psnr(mse),
-        "ssim": ssim_total / max(num_batches, 1),
-    }
-
-
-def prepare_display_images(images: torch.Tensor, *, rescale: bool = False) -> torch.Tensor:
-    display_images = images.detach().cpu().float()
-    if rescale:
-        flat = display_images.reshape(display_images.shape[0], -1)
-        mins = flat.min(dim=1).values.view(-1, 1, 1, 1)
-        maxs = flat.max(dim=1).values.view(-1, 1, 1, 1)
-        display_images = (display_images - mins) / (maxs - mins).clamp_min(1e-8)
-    return display_images.clamp(0.0, 1.0)
-
-
-def diffusion_to_display_range(images: torch.Tensor) -> torch.Tensor:
-    """Map diffusion tensors from [-1, 1] back to [0, 1] for plotting."""
-
-    return ((images.detach().cpu().float() + 1.0) / 2.0).clamp(0.0, 1.0)
-
-
-def image_for_plot(image: torch.Tensor) -> tuple[np.ndarray, dict[str, Any]]:
-    """Convert a CHW tensor into a matplotlib-friendly image plus render kwargs."""
-
-    if image.ndim != 3:
-        raise ValueError(f"Expected a CHW image tensor, got shape {tuple(image.shape)}.")
-
-    if image.shape[0] == 1:
-        return image.squeeze(0).numpy(), {"cmap": "gray", "vmin": 0.0, "vmax": 1.0}
-    if image.shape[0] >= 3:
-        return image[:3].permute(1, 2, 0).clamp(0.0, 1.0).numpy(), {}
-    raise ValueError(f"Unsupported channel count for plotting: {image.shape[0]}.")
-
-
-def resolve_image_interpolation(
-    image: torch.Tensor,
-    *,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> str | None:
-    if interpolation != AUTO_IMAGE_INTERPOLATION:
-        return interpolation
-    if max(image.shape[-2:]) <= LOW_RES_PRESENTATION_MAX_SIZE:
-        return DEFAULT_IMAGE_INTERPOLATION
-    return None
-
-
-def render_image(
-    axis: Any,
-    image: torch.Tensor,
-    *,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    """Render either grayscale or RGB tensors without hardcoding one display mode."""
-
-    plot_tensor = image.detach().cpu().float()
-    plot_image, render_kwargs = image_for_plot(plot_tensor)
-    resolved_interpolation = resolve_image_interpolation(plot_tensor, interpolation=interpolation)
-    if resolved_interpolation is not None:
-        render_kwargs = {**render_kwargs, "interpolation": resolved_interpolation}
-    axis.imshow(plot_image, **render_kwargs)
-
-
-def plot_image_row(
-    images: torch.Tensor,
-    save_path: Path,
-    title: str,
-    *,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    num_images = images.shape[0]
-    figure, axes = plt.subplots(1, num_images, figsize=(1.5 * num_images, 2.0))
-    axes = np.atleast_1d(axes)
-    for axis, image in zip(axes, images):
-        render_image(axis, prepare_display_images(image.unsqueeze(0))[0], interpolation=interpolation)
-        axis.axis("off")
-    figure.suptitle(title)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_image_grid(
-    images: torch.Tensor,
-    save_path: Path,
-    title: str,
-    *,
-    num_cols: int = 5,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    images = prepare_display_images(images)
-    num_images = images.shape[0]
-    num_cols = max(1, min(num_cols, num_images))
-    num_rows = math.ceil(num_images / num_cols)
-    figure, axes = plt.subplots(num_rows, num_cols, figsize=(1.8 * num_cols, 1.8 * num_rows))
-    axes_array = np.atleast_1d(axes).reshape(num_rows, num_cols)
-
-    for image_idx in range(num_rows * num_cols):
-        axis = axes_array.flat[image_idx]
-        axis.axis("off")
-        if image_idx < num_images:
-            render_image(axis, images[image_idx], interpolation=interpolation)
-
-    figure.suptitle(title)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def save_native_image_grid(
-    images: torch.Tensor,
-    save_path: Path,
-    *,
-    num_cols: int | None = None,
-    padding: int = 0,
-    scale: int = 1,
-) -> None:
-    """Save a compact contact sheet without matplotlib enlargement."""
-
-    if padding < 0:
-        raise ValueError("padding must be non-negative")
-    if scale < 1:
-        raise ValueError("scale must be at least 1")
-
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    display_images = prepare_display_images(images).detach().cpu().float().clamp(0.0, 1.0)
-    num_images, channels, height, width = display_images.shape
-    if num_images < 1:
-        raise ValueError("images must contain at least one image")
-
-    resolved_cols = num_cols or math.ceil(math.sqrt(num_images))
-    resolved_cols = max(1, min(resolved_cols, num_images))
-    num_rows = math.ceil(num_images / resolved_cols)
-    sheet = Image.new(
-        "RGB",
-        (
-            resolved_cols * width + (resolved_cols - 1) * padding,
-            num_rows * height + (num_rows - 1) * padding,
-        ),
-        "white",
-    )
-
-    for image_idx, image in enumerate(display_images):
-        if channels == 1:
-            rgb_image = image.repeat(3, 1, 1)
-        else:
-            rgb_image = image[:3]
-        array = (rgb_image.permute(1, 2, 0).numpy() * 255.0).round().astype(np.uint8)
-        tile = Image.fromarray(array, mode="RGB")
-        x = (image_idx % resolved_cols) * (width + padding)
-        y = (image_idx // resolved_cols) * (height + padding)
-        sheet.paste(tile, (x, y))
-
-    if scale > 1:
-        nearest = getattr(getattr(Image, "Resampling", Image), "NEAREST")
-        sheet = sheet.resize((sheet.width * scale, sheet.height * scale), resample=nearest)
-    sheet.save(save_path)
-
-
-def plot_loss_curves(
-    train_losses: list[float],
-    val_losses: list[float],
-    save_path: Path,
-    *,
-    title: str | None = None,
-    y_label: str = "Loss",
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    epochs = np.arange(1, len(train_losses) + 1)
-    figure, axis = plt.subplots(figsize=(8, 5))
-    axis.plot(epochs, train_losses, marker="o", linewidth=2.0, markersize=5, label="Train Loss")
-    axis.plot(epochs, val_losses, marker="s", linewidth=2.0, markersize=5, label="Validation Loss")
-    if title is not None:
-        axis.set_title(title)
-    axis.set_xlabel("Epoch")
-    axis.set_ylabel(y_label)
-    axis.legend()
-    axis.grid(True, alpha=0.3)
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_latent_space(model: nn.Module, loader: DataLoader, device: torch.device, save_path: Path) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.eval()
-    latent_vectors: list[np.ndarray] = []
-    labels_list: list[np.ndarray] = []
-
-    with torch.no_grad():
-        for clean_images, labels in loader:
-            clean_images = clean_images.to(device, non_blocking=True)
-            latent_vectors.append(model.encode(clean_images).cpu().numpy())
-            labels_list.append(labels.numpy())
-
-    all_latent = np.concatenate(latent_vectors, axis=0)
-    all_labels = np.concatenate(labels_list, axis=0)
-    reduced = PCA(n_components=2).fit_transform(all_latent)
-
-    figure, axis = plt.subplots(figsize=(8, 6))
-    scatter = axis.scatter(
-        reduced[:, 0],
-        reduced[:, 1],
-        c=all_labels,
-        cmap="tab10",
-        s=10,
-        alpha=0.75,
-    )
-    axis.set_title("Latent Space Representation")
-    axis.set_xlabel("PCA 1")
-    axis.set_ylabel("PCA 2")
-    figure.colorbar(scatter, ax=axis, label="Digit")
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def show_reconstructions(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-    save_path: Path,
-    *,
-    model_type: str,
-    noise_level: float,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.eval()
-    clean_images, _ = next(iter(loader))
-    num_images = min(10, clean_images.shape[0])
-    clean_images = clean_images[:num_images].to(device)
-
-    inputs = clean_images
-    noisy_images = None
-    if is_denoising(model_type):
-        noisy_images = inject_noise(clean_images, noise_level)
-        inputs = noisy_images
-
-    with torch.no_grad():
-        reconstructed_images = model.reconstruct(inputs) if is_vae_model(model_type) else model(inputs)
-
-    clean_images = clean_images.cpu()
-    reconstructed_images = reconstructed_images.cpu()
-    image_kwargs: dict[str, Any] = {"cmap": "gray"}
-    resolved_interpolation = resolve_image_interpolation(clean_images[0], interpolation=interpolation)
-    if resolved_interpolation is not None:
-        image_kwargs["interpolation"] = resolved_interpolation
-
-    if noisy_images is not None:
-        noisy_images = noisy_images.cpu()
-        figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4), squeeze=False)
-        for i in range(num_images):
-            axes[0, i].imshow(clean_images[i].squeeze(), **image_kwargs)
-            axes[1, i].imshow(noisy_images[i].squeeze(), **image_kwargs)
-            axes[2, i].imshow(reconstructed_images[i].squeeze(), **image_kwargs)
-            for j in range(3):
-                axes[j, i].axis("off")
-        axes[0, 0].set_title("Original")
-        axes[1, 0].set_title("Noisy")
-        axes[2, 0].set_title("Reconstructed")
-    else:
-        figure, axes = plt.subplots(2, num_images, figsize=(1.5 * num_images, 3), squeeze=False)
-        for i in range(num_images):
-            axes[0, i].imshow(clean_images[i].squeeze(), **image_kwargs)
-            axes[1, i].imshow(reconstructed_images[i].squeeze(), **image_kwargs)
-            axes[0, i].axis("off")
-            axes[1, i].axis("off")
-        axes[0, 0].set_title("Original")
-        axes[1, 0].set_title("Reconstructed")
-
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def generate_samples(
-    model: nn.Module,
-    latent_dim: int,
-    device: torch.device,
-    *,
-    save_path: Path,
-    num_samples: int,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.eval()
-    with torch.no_grad():
-        z = torch.randn(num_samples, latent_dim, device=device)
-        generated = model.decoder(z).view(-1, 1, 28, 28).cpu()
-    plot_image_row(generated, save_path, title="VAE Generated Samples")
-
-
-def interpolate_images(
-    model: nn.Module,
-    loader: DataLoader,
-    device: torch.device,
-    *,
-    save_path: Path,
-    steps: int = 10,
-) -> None:
-    model.eval()
-    image_batch: list[torch.Tensor] = []
-    for clean_images, _ in loader:
-        image_batch.append(clean_images)
-        if sum(batch.shape[0] for batch in image_batch) >= 2:
-            break
-
-    if not image_batch:
-        raise ValueError("Loader does not contain any images.")
-
-    source_images = torch.cat(image_batch, dim=0)[:2].to(device)
-    if source_images.shape[0] < 2:
-        raise ValueError("Interpolation requires at least two images.")
-
-    with torch.no_grad():
-        mu, _ = model.encode_features(source_images)
-        z1, z2 = mu[0], mu[1]
-        alphas = torch.linspace(0.0, 1.0, steps, device=device).unsqueeze(1)
-        latent_path = (1.0 - alphas) * z1.unsqueeze(0) + alphas * z2.unsqueeze(0)
-        interpolated = model.decoder(latent_path).view(-1, 1, 28, 28).cpu()
-
-    plot_image_row(interpolated, save_path, title="VAE Latent Interpolation")
-
-
-def plot_diffusion_snapshots(
-    model: nn.Module,
-    scheduler: object,
-    device: torch.device,
-    *,
-    dataset_name: str,
-    image_shape: tuple[int, int, int],
-    base_channels: int,
-    save_path: Path,
-    num_samples: int,
-    sample_labels: torch.Tensor | None = None,
-    guidance_scale: float = 1.0,
-    prediction_type: str = "eps",
-    sampler_name: str = "ddpm",
-    sampling_steps: int | None = None,
-    ddim_eta: float = 0.0,
-    amp_dtype: str = "none",
-    num_snapshots: int = 9,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    _, intermediate_images, intermediate_steps = sample_images(
-        model,
-        scheduler,
-        device,
-        num_samples=num_samples,
-        image_shape=image_shape,
-        labels=sample_labels,
-        guidance_scale=guidance_scale,
-        prediction_type=prediction_type,
-        sampler_name=sampler_name,
-        sampling_steps=sampling_steps,
-        ddim_eta=ddim_eta,
-        amp_dtype=amp_dtype,
-        return_intermediate=True,
-        num_snapshots=num_snapshots,
-    )
-
-    figure, axes = plt.subplots(
-        len(intermediate_images),
-        num_samples,
-        figsize=(1.55 * num_samples, 1.55 * len(intermediate_images)),
-        squeeze=False,
-    )
-
-    for row_idx, (images, step_num) in enumerate(zip(intermediate_images, intermediate_steps)):
-        display_images = prepare_display_images(diffusion_to_display_range(images), rescale=True)
-        for col_idx in range(num_samples):
-            axis = axes[row_idx, col_idx]
-            render_image(axis, display_images[col_idx], interpolation=interpolation)
-            axis.axis("off")
-            if col_idx == 0:
-                axis.set_ylabel(f"t={step_num}", rotation=0, labelpad=24, va="center", fontsize=9, fontweight="bold")
-
-    figure.suptitle(
-        f"Reverse Diffusion Process (Noise -> Image)\n"
-        f"{dataset_name.upper()} | Base Width = {base_channels} | Sample Shape = {image_shape} | {prediction_type}/{sampler_name}",
-        fontsize=13,
-    )
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
-
-
-def plot_diffusion_reconstructions(
-    model: nn.Module,
-    scheduler: object,
-    loader: DataLoader,
-    device: torch.device,
-    *,
-    dataset_name: str,
-    base_channels: int,
-    prediction_type: str,
-    save_path: Path,
-    num_images: int = 8,
-    interpolation: str | None = AUTO_IMAGE_INTERPOLATION,
-) -> None:
-    save_path.parent.mkdir(parents=True, exist_ok=True)
-    model.eval()
-
-    clean_images, labels = next(iter(loader))
-    num_images = min(num_images, clean_images.shape[0])
-    clean_images = clean_images[:num_images].to(device)
-    labels = labels[:num_images].to(device)
-
-    preview_step = max(1, scheduler.num_timesteps // 2)
-    timesteps = torch.full((num_images,), preview_step, device=device, dtype=torch.long)
-    noise = torch.randn_like(clean_images)
-    noisy_images = q_sample(clean_images, timesteps, noise, scheduler)
-
-    with torch.no_grad():
-        model_output = model(noisy_images, timesteps, labels)
-        reconstructed_images = predict_x0_from_model_output(
-            noisy_images,
-            timesteps,
-            model_output,
-            scheduler,
-            prediction_type,
-        ).clamp(-1.0, 1.0)
-
-    clean_images = diffusion_to_display_range(clean_images)
-    noisy_images = diffusion_to_display_range(noisy_images)
-    reconstructed_images = diffusion_to_display_range(reconstructed_images)
-
-    figure, axes = plt.subplots(3, num_images, figsize=(1.5 * num_images, 4.2), squeeze=False)
-    row_titles = ("Original", f"Noisy (t={preview_step})", "Predicted x0")
-    image_rows = (clean_images, noisy_images, reconstructed_images)
-
-    for row_idx, (row_title, row_images) in enumerate(zip(row_titles, image_rows)):
-        for col_idx in range(num_images):
-            axis = axes[row_idx, col_idx]
-            render_image(axis, row_images[col_idx], interpolation=interpolation)
-            axis.axis("off")
-            if col_idx == 0:
-                axis.set_title(row_title)
-
-    figure.suptitle(
-        f"Diffusion Reconstruction Preview ({dataset_name.upper()}, Base Width={base_channels}, {prediction_type})",
-        fontsize=13,
-    )
-    figure.tight_layout()
-    figure.savefig(save_path, dpi=200, bbox_inches="tight")
-    plt.close(figure)
 
 
 def instantiate_model(config: ExperimentConfig, device: torch.device) -> tuple[nn.Module, Any | None]:

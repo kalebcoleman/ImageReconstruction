@@ -79,7 +79,7 @@ The denoising autoencoder tests whether the model can recover clean images from 
 
 Diffusion was added after the main PCA vs AE reconstruction work. It focuses on generation rather than reconstruction.
 
-MNIST and Fashion-MNIST generations are stronger because they are simpler datasets: grayscale, low resolution, and less visually varied. CIFAR-10 is harder due to RGB channels, object complexity, backgrounds, and higher variation.
+MNIST generations are stronger because the dataset is grayscale, low resolution, and visually simple. CIFAR-10 is harder due to RGB channels, object complexity, backgrounds, and higher variation.
 
 The 1x grid preserves the original 28x28 or 32x32 sample size. The enlarged version uses nearest-neighbor scaling so the images remain sharp instead of blurry.
 
@@ -94,18 +94,6 @@ Actual-size grid:
 Nearest-neighbor enlarged grid:
 
 <img src="./assets/combined/mnist_diffusion_grid_nearest_large.png" class="pixelated" alt="MNIST diffusion enlarged nearest-neighbor grid">
-
-### Fashion-MNIST Diffusion Generations
-
-Fashion-MNIST diffusion visuals were not found in the current local output folders. The grids below are placeholders until those outputs are added.
-
-Actual-size grid:
-
-<img src="./assets/combined/fashion_diffusion_grid_1x.png" class="pixelated" alt="Fashion-MNIST diffusion 1x grid">
-
-Nearest-neighbor enlarged grid:
-
-<img src="./assets/combined/fashion_diffusion_grid_nearest_large.png" class="pixelated" alt="Fashion-MNIST diffusion enlarged nearest-neighbor grid">
 
 ### CIFAR-10 Diffusion Generations
 
@@ -164,7 +152,6 @@ python train.py --model vae --dataset mnist --latent-dim 16
 
 # Diffusion extension with existing configs
 python train.py --config configs/diffusion/mnist.yaml
-python train.py --config configs/diffusion/fashion.yaml
 python train.py --config configs/diffusion/cifar10.yaml
 ```
 

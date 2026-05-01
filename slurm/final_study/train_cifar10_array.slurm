@@ -35,27 +35,38 @@ if (( TASK_ID < 0 || TASK_ID >= ${#SEED_ARRAY[@]} )); then
 fi
 SEED="${SEED_ARRAY[$TASK_ID]}"
 DATASET="cifar10"
+RUN_NAME="study_${DATASET}_seed$(printf "%03d" "${SEED}")"
+RUN_DIR="${STUDY_DIR}/runs/${DATASET}/diffusion/${RUN_NAME}"
 
 final_study_prepare_runtime
 final_study_print_context "train"
 echo "Dataset: ${DATASET}"
 echo "Seed: ${SEED}"
+echo "Run: ${RUN_NAME}"
+
+if [[ -f "${RUN_DIR}/checkpoints/best.pt" && -f "${RUN_DIR}/metrics.json" ]]; then
+  echo "Completed run already exists: ${RUN_DIR}"
+  exit 0
+fi
+if [[ -d "${RUN_DIR}" && "${CLEAR_INCOMPLETE}" == "1" ]]; then
+  echo "Removing incomplete run: ${RUN_DIR}"
+  rm -rf "${RUN_DIR}"
+elif [[ -d "${RUN_DIR}" ]]; then
+  echo "Incomplete run exists: ${RUN_DIR}" >&2
+  echo "Set CLEAR_INCOMPLETE=1 to delete it before rerunning." >&2
+  exit 1
+fi
 
 final_study_activate_conda
 final_study_cd_repo
 
 COMMAND=(
-  "${PYTHON_BIN}" run_parity_suite.py run
-  --study-dir "${STUDY_DIR}"
+  "${PYTHON_BIN}" train.py
+  --config "configs/diffusion/cifar10.yaml"
+  --seed "${SEED}"
+  --run-name "${RUN_NAME}"
   --data-dir "${DATA_DIR}"
-  --datasets "${DATASET}"
-  --seeds "${SEED}"
-  --phase train
-  --skip-existing
-  --no-summarize
+  --output-dir "${STUDY_DIR}/runs"
 )
-if [[ "${CLEAR_INCOMPLETE}" == "1" ]]; then
-  COMMAND+=(--clear-incomplete)
-fi
 
 final_study_run_command "${COMMAND[@]}"

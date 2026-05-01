@@ -68,17 +68,14 @@ Backward-compatible aliases such as `--batch-size` and `--diffusion-timesteps` s
 
 ## Recommended workflow
 
-For the final MNIST/FashionMNIST/CIFAR10 diffusion study, use the dataset-specific
+For the final MNIST/CIFAR10 diffusion runs, use the dataset-specific
 arrays under [`final_study/`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study)
 instead of the older exploratory sweeps:
 
 ```bash
 sbatch slurm/final_study/smoke_array.slurm
 sbatch slurm/final_study/train_mnist_array.slurm
-sbatch slurm/final_study/train_fashion_array.slurm
 sbatch slurm/final_study/train_cifar10_array.slurm
-ALLOW_MODEL_DOWNLOAD=1 sbatch slurm/final_study/eval_all_array.slurm
-sbatch slurm/final_study/finalize.slurm
 ```
 
 See [`final_study/README.md`](/Users/itzjuztmya/Kaleb/ImageReconstruction/slurm/final_study/README.md)

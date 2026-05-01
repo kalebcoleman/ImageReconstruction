@@ -97,7 +97,6 @@ load_cluster_modules() {
 
 normalize_dataset_name() {
   case "$1" in
-    fashion-mnist|fashion_mnist) printf '%s\n' "fashion" ;;
     cifar|cifar-10|cifar_10) printf '%s\n' "cifar10" ;;
     ilsvrc|ilsvrc2012) printf '%s\n' "imagenet" ;;
     *) printf '%s\n' "$1" ;;
@@ -107,7 +106,6 @@ normalize_dataset_name() {
 dataset_cache_dir_for() {
   case "$(normalize_dataset_name "$1")" in
     mnist) printf '%s\n' "MNIST" ;;
-    fashion) printf '%s\n' "FashionMNIST" ;;
     cifar10) printf '%s\n' "cifar-10-batches-py" ;;
     imagenet) printf '%s\n' "imagenet" ;;
     *)

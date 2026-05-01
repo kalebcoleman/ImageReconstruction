@@ -29,7 +29,7 @@ protocol:
   name: legacy28_gray_v1
   description: >
     Dataset-appropriate default recipe for native 28x28 grayscale diffusion
-    runs with the legacy UNet backbone, centered on MNIST and FashionMNIST.
+    runs with the legacy UNet backbone, centered on MNIST.
   dataset_variant: legacy28_gray
   diffusion_preprocessing: default
   eval_batch_size: 128
@@ -72,4 +72,4 @@ protocol:
     - output_dir
     - run_name
     - download
-  default_use_case: mnist_fashion_final_study
+  default_use_case: mnist_final_study
