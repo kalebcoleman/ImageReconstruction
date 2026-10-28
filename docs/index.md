@@ -1,3 +1,5 @@
+---
+---
 # PCA vs Autoencoders for Image Reconstruction
 
 <link rel="stylesheet" href="./style.css">
