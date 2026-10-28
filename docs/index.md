@@ -6,29 +6,19 @@
 
 ## Overview
 
-This CS 472 final project compares classical PCA reconstruction with neural autoencoder reconstruction on MNIST and Fashion-MNIST. PCA assets and the final cross-method analysis are owned by my teammate and will be merged later; this page currently shows the autoencoder-side results plus clear PCA placeholders.
+This CS 472 final project compares classical PCA reconstruction with neural autoencoder reconstruction on MNIST and Fashion-MNIST. PCA assets and the final cross-method analysis are owned by my teammate and have not yet been added. This page presents the available autoencoder results and the diffusion extension.
 
 My portion covers regular autoencoders, denoising autoencoders, variational autoencoders, VAE interpolation/generation, and a small diffusion extension. Diffusion is extra credit and is separate from the main PCA vs autoencoder comparison.
 
 ## Main Comparison: PCA vs Autoencoder
 
-The final report will compare PCA and autoencoder reconstructions at matched compression levels using visual grids and metrics such as MSE, PSNR, and SSIM. The PCA visuals below are placeholders until teammate results are merged.
-
-### PCA Placeholders
-
-![PCA MNIST reconstruction placeholder](./assets/placeholders/pca_mnist_reconstructions_placeholder.png)
-
-![PCA Fashion-MNIST reconstruction placeholder](./assets/placeholders/pca_fashion_reconstructions_placeholder.png)
-
-![PCA metrics placeholder](./assets/placeholders/pca_metrics_placeholder.png)
+The intended comparison uses matched compression levels, visual grids, and metrics such as MSE, PSNR, and SSIM. PCA results are not yet available in this repository, so no cross-method conclusions are shown here.
 
 ### Current Autoencoder Reference Results
 
 ![MNIST AE reconstruction grid](./assets/mnist/ae_reconstruction_latent16.png)
 
 ![MNIST AE model comparison at latent dimension 16](./assets/mnist/model_comparison_latent16.png)
-
-![Combined PCA vs AE placeholder](./assets/placeholders/pca_vs_ae_combined_grid_placeholder.png)
 
 ## AE / DAE / VAE Results
 
@@ -94,7 +84,7 @@ Nearest-neighbor 4x display:
 
 <img src="./assets/diffusion/cifar10_samples_nearest_4x.png" class="pixelated" alt="CIFAR-10 diffusion samples enlarged with nearest-neighbor interpolation">
 
-## Full Analysis Placeholder
+## Next Steps
 
 The final written conclusions will be added after PCA results are merged:
 
