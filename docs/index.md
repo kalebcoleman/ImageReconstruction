@@ -48,15 +48,11 @@ The regular autoencoder is the main neural reconstruction baseline against PCA. 
 
 ## VAE Interpolation and Generation
 
-The VAE latent space supports smooth movement between examples and random generation from the learned latent distribution.
-
-![MNIST VAE interpolation](./assets/combined/vae_interpolation_latent16.png)
+The VAE supports sampling from its learned latent distribution, as shown in the generated samples above. An interpolation figure is not available in the repository yet.
 
 ## Metrics Snapshot
 
-The metric plots below summarize the current autoencoder-side results. PCA metric overlays will be added when teammate outputs are available.
-
-![MNIST metrics by model and latent dimension](./assets/mnist/metrics_by_model_latent.png)
+The model comparison above shows MSE, PSNR, and SSIM for the available MNIST autoencoder experiments at latent dimension 16. PCA metrics will be added when the teammate’s results are available.
 
 ## Extra Credit Extension: Diffusion Model
 
