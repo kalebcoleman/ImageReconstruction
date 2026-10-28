@@ -2,7 +2,7 @@
 
 CS 472 unsupervised learning final project comparing PCA and autoencoder-based image reconstruction on MNIST and Fashion-MNIST. PCA is teammate-owned work and final PCA figures/analysis will be merged later. This side of the repo contains AE, DAE, VAE, VAE interpolation/generation, and an extra-credit diffusion extension.
 
-The GitHub Pages writeup is in [`docs/index.md`](docs/index.md).
+Explore the [project write-up and visual results](https://kalebcoleman.github.io/ImageReconstruction/). The site is built by GitHub Pages from [`docs/index.md`](docs/index.md) and its accompanying assets.
 
 ## Project Layout
 
