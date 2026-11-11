@@ -14,12 +14,6 @@ from PIL import Image, ImageDraw, ImageFont, UnidentifiedImageError
 
 DEFAULT_SOURCE_DIRS = ("outputs", "runs", "results", "figures", "plots", "images")
 ASSET_ROOT = Path("docs/assets")
-PCA_PLACEHOLDERS = {
-    "pca_mnist_reconstructions_placeholder.png": "PCA MNIST reconstruction grid from teammate.",
-    "pca_fashion_reconstructions_placeholder.png": "PCA Fashion-MNIST reconstruction grid from teammate.",
-    "pca_metrics_placeholder.png": "PCA metrics plot: MSE, PSNR, and SSIM.",
-    "pca_vs_ae_combined_grid_placeholder.png": "Final PCA vs autoencoder comparison grid.",
-}
 AUTOENCODER_TARGETS = {
     Path("mnist/ae_reconstruction_latent16.png"): (
         "*mnist*ae*recon*latent*16*.png",
@@ -154,22 +148,6 @@ def save_nearest_scaled(source: Path, target: Path, *, scale: int, overwrite: bo
     return True
 
 
-def create_pca_placeholders(*, overwrite: bool, dry_run: bool) -> int:
-    count = 0
-    for filename, body in PCA_PLACEHOLDERS.items():
-        count += int(
-            create_placeholder(
-                ASSET_ROOT / "placeholders" / filename,
-                "PCA Results Placeholder",
-                body,
-                size=(900, 540),
-                overwrite=overwrite,
-                dry_run=dry_run,
-            )
-        )
-    return count
-
-
 def collect_autoencoder_assets(source_dirs: list[Path], *, overwrite: bool, dry_run: bool) -> int:
     count = 0
     for relative_target, patterns in AUTOENCODER_TARGETS.items():
@@ -253,11 +231,10 @@ def main() -> int:
         source_dirs.extend(Path(path) for path in args.source_dirs)
 
     if not args.dry_run:
-        for directory in ("mnist", "fashion_mnist", "diffusion", "combined", "placeholders"):
+        for directory in ("mnist", "fashion_mnist", "diffusion", "combined"):
             (ASSET_ROOT / directory).mkdir(parents=True, exist_ok=True)
 
     changed = 0
-    changed += create_pca_placeholders(overwrite=args.overwrite, dry_run=args.dry_run)
     changed += collect_autoencoder_assets(source_dirs, overwrite=args.overwrite, dry_run=args.dry_run)
     changed += collect_diffusion_assets(source_dirs, overwrite=args.overwrite, dry_run=args.dry_run)
 
